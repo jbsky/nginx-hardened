@@ -55,6 +55,8 @@ jobs:
 
       - name: Check versions
         id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -62,9 +64,11 @@ jobs:
           NGINX_LATEST=$(curl -fsSL https://nginx.org/en/download.html \
             | grep -oP 'Stable version</h4>.*?Legacy' \
             | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
-          MODSEC_LATEST=$(curl -fsSL https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
+          MODSEC_LATEST=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
             | jq -r '.tag_name' | sed 's/^v//')
-          CRS_LATEST=$(curl -fsSL https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
+          CRS_LATEST=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
             | jq -r '.tag_name' | sed 's/^v//')
 
           echo "nginx_ver=${NGINX_LATEST}" >> "$GITHUB_OUTPUT"

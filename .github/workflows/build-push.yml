@@ -96,14 +96,18 @@ jobs:
 
       - name: Resolve upstream versions
         id: versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           NGINX_VER=$(curl -fsSL https://nginx.org/en/download.html \
             | grep -oP 'Stable version</h4>.*?Legacy' \
             | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
-          MODSEC_VER=$(curl -fsSL https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
+          MODSEC_VER=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
             | jq -r '.tag_name' | sed 's/^v//')
-          CRS_VER=$(curl -fsSL https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
+          CRS_VER=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
             | jq -r '.tag_name' | sed 's/^v//')
           echo "nginx=${NGINX_VER}" >> "$GITHUB_OUTPUT"
           echo "modsec=${MODSEC_VER}" >> "$GITHUB_OUTPUT"
