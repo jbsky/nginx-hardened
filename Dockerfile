@@ -191,7 +191,7 @@ LABEL org.opencontainers.image.title="nginx-waf-hardened" \
 # Runtime deps only
 RUN apk add --no-cache \
     ca-certificates curl libcurl libgcc libmaxminddb libstdc++ \
-    libxml2 lmdb openssl pcre2 tzdata yajl zlib && \
+    libxml2 lmdb openssl pcre2 tzdata yajl zlib geoip && \
     addgroup -g 1999 -S nginx && \
     adduser -S -D -H -u 1999 -h /var/cache/nginx -s /sbin/nologin -G nginx nginx && \
     mkdir -p /var/log/nginx /var/cache/nginx/client_temp /var/cache/nginx/proxy_temp \
@@ -212,6 +212,7 @@ COPY --from=builder /usr/lib/nginx/modules/ /usr/lib/nginx/modules/
 COPY --from=builder /usr/local/modsecurity/lib/ /usr/local/modsecurity/lib/
 COPY --from=builder /usr/local/owasp-modsecurity-crs/ /usr/local/owasp-modsecurity-crs/
 COPY --from=builder /etc/nginx/geoip/ /etc/nginx/geoip/
+COPY --from=builder /etc/nginx/mime.types /etc/nginx/mime.types
 COPY --from=builder /tmp/image-versions /etc/image-versions
 
 # Copy configuration
@@ -225,8 +226,9 @@ COPY --chown=root:nginx conf/owasp/ /usr/local/owasp-modsecurity-crs/
 RUN chmod 755 /usr/sbin/nginx && \
     chmod 644 /etc/nginx/nginx.conf /etc/nginx/conf.d/*.conf /etc/nginx/modsec/* && \
     chmod 755 /usr/lib/nginx/modules/*.so && \
+    ln -sf /usr/lib/nginx/modules /etc/nginx/modules && \
     touch /var/run/nginx/nginx.pid && chown nginx:nginx /var/run/nginx/nginx.pid && \
-    echo "/usr/local/modsecurity/lib" >> /etc/ld-musl-x86_64.path
+    printf '/lib\n/usr/local/lib\n/usr/lib\n/usr/local/modsecurity/lib\n' > /etc/ld-musl-x86_64.path
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -fsS http://127.0.0.1:80/healthz || exit 1
