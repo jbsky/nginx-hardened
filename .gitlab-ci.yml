@@ -61,7 +61,7 @@ version-check:
     - apk add --no-cache curl jq grep
     - |
       NGINX_LATEST=$(curl -fsSL https://nginx.org/en/download.html \
-        | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
       MODSEC_LATEST=$(curl -fsSL https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
         | jq -r '.tag_name' | sed 's/^v//')
       CRS_LATEST=$(curl -fsSL https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
@@ -179,7 +179,7 @@ build:
         RESOLVED_NGINX="${NGINX_VER}"
       else
         RESOLVED_NGINX=$(curl -fsSL https://nginx.org/en/download.html \
-          | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
       fi
       if [ -n "${MODSEC_VER:-}" ]; then
         RESOLVED_MODSEC="${MODSEC_VER}"
@@ -257,7 +257,7 @@ sign:
         exit 0
       fi
     - apk add --no-cache cosign
-    - DIGEST=$(grep -o 'sha256:[a-f0-9]*' image-digest.txt | head -1)
+    - DIGEST=$(grep -o 'sha256:[a-f0-9]*' image-digest.txt | sed -n '1p')
     - cosign sign --yes ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}@${DIGEST}
   allow_failure: true
 

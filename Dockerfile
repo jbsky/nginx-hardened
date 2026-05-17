@@ -27,7 +27,7 @@ ARG OWASP_CRS_VER=""
 RUN set -eux; \
     if [ -z "$NGINX_VER" ]; then \
       NGINX_VER=$(curl -fsSL https://nginx.org/en/download.html \
-        | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1); \
+        | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p'); \
     fi; \
     echo "$NGINX_VER" > /tmp/NGINX_VER; \
     if [ -z "$MODSEC_VER" ]; then \

@@ -60,7 +60,7 @@ jobs:
 
           # Fetch latest upstream versions
           NGINX_LATEST=$(curl -fsSL https://nginx.org/en/download.html \
-            | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
           MODSEC_LATEST=$(curl -fsSL https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
             | jq -r '.tag_name' | sed 's/^v//')
           CRS_LATEST=$(curl -fsSL https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
