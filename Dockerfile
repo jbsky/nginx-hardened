@@ -15,7 +15,7 @@
 # ---------------------------------------------------------------------------
 # Stage 0: fetcher — résout les dernières versions stables
 # ---------------------------------------------------------------------------
-FROM alpine:3.21 AS fetcher
+FROM alpine:3.23 AS fetcher
 
 RUN apk add --no-cache curl jq grep
 
@@ -45,7 +45,7 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------
 # Stage 1: builder — compile tout from source
 # ---------------------------------------------------------------------------
-FROM alpine:3.21 AS builder
+FROM alpine:3.23 AS builder
 
 # Trust homelab CA if provided (for builds behind SSL-bumping proxy)
 RUN --mount=type=secret,id=ca-certs,target=/tmp/ca-bundle.crt,required=false \
@@ -177,7 +177,7 @@ RUN . /etc/profile.d/ver.sh && \
 # ---------------------------------------------------------------------------
 # Stage 2: production — runtime minimal
 # ---------------------------------------------------------------------------
-FROM alpine:3.21 AS production
+FROM alpine:3.23 AS production
 
 LABEL org.opencontainers.image.title="nginx-waf-hardened" \
       org.opencontainers.image.description="Hardened Nginx + ModSecurity v3 + OWASP CRS + GeoIP2 + VTS" \
