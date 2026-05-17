@@ -91,6 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           NGINX_VER=$(curl -fsSL https://nginx.org/en/download.html \
+            | grep -oP 'Stable version</h4>.*?Legacy' \
             | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
           MODSEC_VER=$(curl -fsSL https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
             | jq -r '.tag_name' | sed 's/^v//')

@@ -61,6 +61,7 @@ version-check:
     - apk add --no-cache curl jq grep
     - |
       NGINX_LATEST=$(curl -fsSL https://nginx.org/en/download.html \
+        | grep -oP 'Stable version</h4>.*?Legacy' \
         | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
       MODSEC_LATEST=$(curl -fsSL https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
         | jq -r '.tag_name' | sed 's/^v//')
@@ -179,6 +180,7 @@ build:
         RESOLVED_NGINX="${NGINX_VER}"
       else
         RESOLVED_NGINX=$(curl -fsSL https://nginx.org/en/download.html \
+          | grep -oP 'Stable version</h4>.*?Legacy' \
           | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
       fi
       if [ -n "${MODSEC_VER:-}" ]; then

@@ -27,6 +27,7 @@ ARG OWASP_CRS_VER=""
 RUN set -eux; \
     if [ -z "$NGINX_VER" ]; then \
       NGINX_VER=$(curl -fsSL https://nginx.org/en/download.html \
+        | grep -oP 'Stable version</h4>.*?Legacy' \
         | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p'); \
     fi; \
     echo "$NGINX_VER" > /tmp/NGINX_VER; \
@@ -147,7 +148,7 @@ RUN . /etc/profile.d/ver.sh && \
       --with-stream --with-stream_ssl_module \
       --with-stream_ssl_preread_module \
       --with-stream_realip_module \
-      --with-cc-opt='-Os -fstack-protector-strong -fPIE -D_FORTIFY_SOURCE=2' \
+      --with-cc-opt='-Os -fstack-protector-strong -fPIC -D_FORTIFY_SOURCE=2' \
       --with-ld-opt='-Wl,-z,relro,-z,now,-z,noexecstack -pie' \
       --without-http_autoindex_module \
       --without-http_ssi_module \

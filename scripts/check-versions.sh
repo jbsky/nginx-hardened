@@ -12,8 +12,9 @@ echo "==> Checking upstream versions..."
 
 # --- Fetch latest stable Nginx ---
 NGINX_LATEST=$(curl -fsSL https://nginx.org/en/download.html \
-  | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-echo "Nginx latest: ${NGINX_LATEST}"
+  | grep -oP 'Stable version</h4>.*?Legacy' \
+  | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
+echo "Nginx latest stable: ${NGINX_LATEST}"
 
 # --- Fetch latest ModSecurity ---
 MODSEC_LATEST=$(curl -fsSL https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
