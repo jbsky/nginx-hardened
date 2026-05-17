@@ -1,0 +1,250 @@
+# =====================================================================
+#  Version Watch — Detection automatique de nouvelles versions
+#
+#  Routine quotidienne (06h00 UTC) :
+#    1. Interroge nginx.org + GitHub API pour les dernieres versions
+#    2. Compare avec les versions de la derniere image publiee
+#    3. Si mise a jour disponible → trigger rebuild + notification
+#
+#  Notifications :
+#    - GitHub Release (cree un tag automatique vX.Y.Z-autoN)
+#    - GitHub Discussion (si activee sur le repo)
+#    - Email via les notifications GitHub (cf. README)
+# =====================================================================
+name: version-watch
+
+on:
+  schedule:
+    # Quotidien a 06h00 UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  NAMESPACE: ${{ github.repository_owner }}
+  IMAGE_NAME: nginx-waf-hardened
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  security-events: write
+  attestations: write
+  issues: write
+
+jobs:
+  # -------------------------------------------------------------------
+  check:
+    name: Check upstream versions
+    runs-on: ubuntu-latest
+    outputs:
+      rebuild: ${{ steps.check.outputs.rebuild }}
+      nginx_ver: ${{ steps.check.outputs.nginx_ver }}
+      modsec_ver: ${{ steps.check.outputs.modsec_ver }}
+      crs_ver: ${{ steps.check.outputs.crs_ver }}
+      changes: ${{ steps.check.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login ghcr.io (to inspect current image)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check versions
+        id: check
+        run: |
+          set -euo pipefail
+
+          # Fetch latest upstream versions
+          NGINX_LATEST=$(curl -fsSL https://nginx.org/en/download.html \
+            | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          MODSEC_LATEST=$(curl -fsSL https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
+            | jq -r '.tag_name' | sed 's/^v//')
+          CRS_LATEST=$(curl -fsSL https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
+            | jq -r '.tag_name' | sed 's/^v//')
+
+          echo "nginx_ver=${NGINX_LATEST}" >> "$GITHUB_OUTPUT"
+          echo "modsec_ver=${MODSEC_LATEST}" >> "$GITHUB_OUTPUT"
+          echo "crs_ver=${CRS_LATEST}" >> "$GITHUB_OUTPUT"
+
+          echo "Upstream: nginx=${NGINX_LATEST} modsec=${MODSEC_LATEST} crs=${CRS_LATEST}"
+
+          # Try to read versions from current image labels
+          REBUILD=false
+          CHANGES=""
+
+          IMAGE="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest"
+          if docker pull "$IMAGE" 2>/dev/null; then
+            CURRENT=$(docker inspect --format='{{index .Config.Labels "versions"}}' "$IMAGE" 2>/dev/null || echo "")
+            CURRENT_NGINX=$(echo "$CURRENT" | grep -oP 'nginx=\K[0-9.]+' || echo "none")
+            CURRENT_MODSEC=$(echo "$CURRENT" | grep -oP 'modsec=\K[0-9.]+' || echo "none")
+            CURRENT_CRS=$(echo "$CURRENT" | grep -oP 'crs=\K[0-9.]+' || echo "none")
+
+            echo "Current: nginx=${CURRENT_NGINX} modsec=${CURRENT_MODSEC} crs=${CURRENT_CRS}"
+
+            if [ "$NGINX_LATEST" != "$CURRENT_NGINX" ]; then
+              REBUILD=true
+              CHANGES="${CHANGES}Nginx: ${CURRENT_NGINX} → ${NGINX_LATEST}\n"
+            fi
+            if [ "$MODSEC_LATEST" != "$CURRENT_MODSEC" ]; then
+              REBUILD=true
+              CHANGES="${CHANGES}ModSecurity: ${CURRENT_MODSEC} → ${MODSEC_LATEST}\n"
+            fi
+            if [ "$CRS_LATEST" != "$CURRENT_CRS" ]; then
+              REBUILD=true
+              CHANGES="${CHANGES}OWASP CRS: ${CURRENT_CRS} → ${CRS_LATEST}\n"
+            fi
+          else
+            echo "No current image found, rebuild needed"
+            REBUILD=true
+            CHANGES="Initial build: nginx=${NGINX_LATEST} modsec=${MODSEC_LATEST} crs=${CRS_LATEST}"
+          fi
+
+          echo "rebuild=${REBUILD}" >> "$GITHUB_OUTPUT"
+          echo "changes=${CHANGES}" >> "$GITHUB_OUTPUT"
+          echo "Rebuild needed: ${REBUILD}"
+
+  # -------------------------------------------------------------------
+  rebuild:
+    name: Rebuild image
+    needs: check
+    if: needs.check.outputs.rebuild == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute auto-release tag
+        id: tag
+        run: |
+          # Format: auto-YYYYMMDD.N (N = run number for uniqueness)
+          TAG="auto-$(date +%Y%m%d).${GITHUB_RUN_NUMBER}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          sbom: true
+          provenance: mode=max
+          build-args: |
+            NGINX_VER=${{ needs.check.outputs.nginx_ver }}
+            MODSEC_VER=${{ needs.check.outputs.modsec_ver }}
+            OWASP_CRS_VER=${{ needs.check.outputs.crs_ver }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:nginx-${{ needs.check.outputs.nginx_ver }}
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
+          labels: |
+            versions=nginx=${{ needs.check.outputs.nginx_ver }} modsec=${{ needs.check.outputs.modsec_ver }} crs=${{ needs.check.outputs.crs_ver }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=nginx-waf
+          cache-to: type=gha,mode=max,scope=nginx-waf
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image
+        run: |
+          cosign sign --yes \
+            "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: sarif
+          output: trivy-nginx.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+          ignore-unfixed: true
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-nginx.sarif
+          category: version-watch
+
+  # -------------------------------------------------------------------
+  notify:
+    name: Notify new image
+    needs: [check, rebuild]
+    if: needs.check.outputs.rebuild == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create git tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ needs.rebuild.outputs.tag }}" -m "Auto-rebuild: nginx=${{ needs.check.outputs.nginx_ver }} modsec=${{ needs.check.outputs.modsec_ver }} crs=${{ needs.check.outputs.crs_ver }}"
+          git push origin "${{ needs.rebuild.outputs.tag }}"
+
+      - name: Create GitHub Release (notification trigger)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.rebuild.outputs.tag }}
+          name: "Auto-update: Nginx ${{ needs.check.outputs.nginx_ver }} + ModSec ${{ needs.check.outputs.modsec_ver }}"
+          body: |
+            ## Automatic rebuild triggered by upstream version change
+
+            ### Updated components
+            ${{ needs.check.outputs.changes }}
+
+            ### Versions in this image
+            | Component | Version |
+            |-----------|---------|
+            | Nginx | ${{ needs.check.outputs.nginx_ver }} |
+            | ModSecurity | ${{ needs.check.outputs.modsec_ver }} |
+            | OWASP CRS | ${{ needs.check.outputs.crs_ver }} |
+
+            ### Pull
+            ```bash
+            docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
+            # or pinned:
+            docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:nginx-${{ needs.check.outputs.nginx_ver }}
+            ```
+
+            ### Verify signature
+            ```bash
+            cosign verify ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest \
+              --certificate-identity-regexp '^https://github.com/${{ github.repository }}/' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
+            ```
+          generate_release_notes: false
+          prerelease: true
+
+      - name: Summary
+        run: |
+          echo "### New image published!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** \`${{ needs.rebuild.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Nginx:** ${{ needs.check.outputs.nginx_ver }}" >> $GITHUB_STEP_SUMMARY
+          echo "**ModSecurity:** ${{ needs.check.outputs.modsec_ver }}" >> $GITHUB_STEP_SUMMARY
+          echo "**OWASP CRS:** ${{ needs.check.outputs.crs_ver }}" >> $GITHUB_STEP_SUMMARY

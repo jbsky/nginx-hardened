@@ -1,0 +1,295 @@
+# =====================================================================
+#  Pipeline GitLab CI – Nginx WAF Hardened
+#  - Version check (schedule only: skip build if up-to-date)
+#  - Lint (hadolint + shellcheck)
+#  - Build multi-arch via buildx + registry cache
+#  - Sign (cosign keyless OIDC GitLab)
+#  - Scan (Trivy SARIF)
+#  - Release (tarball sur tag)
+#
+#  Scheduled pipelines: check upstream versions, rebuild only if changed.
+#  Configure a pipeline schedule: daily "0 6 * * *"
+# =====================================================================
+
+stages:
+  - check
+  - lint
+  - build
+  - sign
+  - scan
+  - release
+
+variables:
+  DOCKER_BUILDKIT: "1"
+  REGISTRY: $CI_REGISTRY
+  IMAGE_NAMESPACE: $CI_PROJECT_PATH
+  IMAGE_NAME: nginx-waf-hardened
+  COSIGN_EXPERIMENTAL: "1"
+  PLATFORMS: "linux/amd64"
+
+default:
+  image: docker:27
+  services:
+    - docker:27-dind
+  before_script:
+    - docker info >/dev/null
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - |
+      if [ -n "$DOCKERHUB_TOKEN" ]; then
+        echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin docker.io
+      fi
+
+workflow:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+# ---------- VERSION CHECK (scheduled only) ------------------------------
+# Compares upstream versions with current image. Stops pipeline early
+# if no update is needed (exits non-zero → pipeline stops gracefully).
+version-check:
+  stage: check
+  image: alpine:3.21
+  before_script: []
+  services: []
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  script:
+    - apk add --no-cache curl jq grep
+    - |
+      NGINX_LATEST=$(curl -fsSL https://nginx.org/en/download.html \
+        | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+      MODSEC_LATEST=$(curl -fsSL https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
+        | jq -r '.tag_name' | sed 's/^v//')
+      CRS_LATEST=$(curl -fsSL https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
+        | jq -r '.tag_name' | sed 's/^v//')
+
+      echo "Upstream: nginx=${NGINX_LATEST} modsec=${MODSEC_LATEST} crs=${CRS_LATEST}"
+
+      # Try to read current versions from registry image manifest annotations
+      # If we can't inspect, we rebuild (safe default)
+      export TRIVY_USERNAME="$CI_REGISTRY_USER"
+      export TRIVY_PASSWORD="$CI_REGISTRY_PASSWORD"
+
+      CURRENT_LABELS=$(curl -fsSL -u "${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD}" \
+        "https://${CI_REGISTRY}/v2/${IMAGE_NAMESPACE}/${IMAGE_NAME}/manifests/latest" \
+        -H "Accept: application/vnd.oci.image.manifest.v1+json" 2>/dev/null | \
+        jq -r '.annotations["versions"] // empty' || echo "")
+
+      if [ -z "$CURRENT_LABELS" ]; then
+        echo "Cannot read current image versions, rebuilding..."
+        echo "REBUILD=true" > version-check.env
+      else
+        CURRENT_NGINX=$(echo "$CURRENT_LABELS" | grep -oP 'nginx=\K[0-9.]+' || echo "none")
+        CURRENT_MODSEC=$(echo "$CURRENT_LABELS" | grep -oP 'modsec=\K[0-9.]+' || echo "none")
+        CURRENT_CRS=$(echo "$CURRENT_LABELS" | grep -oP 'crs=\K[0-9.]+' || echo "none")
+
+        echo "Current: nginx=${CURRENT_NGINX} modsec=${CURRENT_MODSEC} crs=${CURRENT_CRS}"
+
+        if [ "$NGINX_LATEST" = "$CURRENT_NGINX" ] && \
+           [ "$MODSEC_LATEST" = "$CURRENT_MODSEC" ] && \
+           [ "$CRS_LATEST" = "$CURRENT_CRS" ]; then
+          echo "All versions up-to-date, skipping rebuild."
+          echo "REBUILD=false" > version-check.env
+        else
+          echo "Update detected! Rebuilding..."
+          echo "REBUILD=true" > version-check.env
+        fi
+      fi
+
+      echo "NGINX_VER=${NGINX_LATEST}" >> version-check.env
+      echo "MODSEC_VER=${MODSEC_LATEST}" >> version-check.env
+      echo "CRS_VER=${CRS_LATEST}" >> version-check.env
+      cat version-check.env
+  artifacts:
+    reports:
+      dotenv: version-check.env
+    expire_in: 1 day
+
+# ---------- LINT --------------------------------------------------------
+hadolint:
+  stage: lint
+  image: hadolint/hadolint:latest-alpine
+  before_script: []
+  services: []
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "schedule"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+  script:
+    - hadolint --failure-threshold warning Dockerfile
+
+shellcheck:
+  stage: lint
+  image: koalaman/shellcheck-alpine:stable
+  before_script: []
+  services: []
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "schedule"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+  script:
+    - shellcheck scripts/*.sh
+
+# ---------- BUILD -------------------------------------------------------
+build:
+  stage: build
+  rules:
+    # On schedule: only run if version-check says REBUILD=true
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: on_success
+    # On push/tag/MR: always run
+    - when: on_success
+  script:
+    - apk add --no-cache git
+    # Skip if scheduled and no rebuild needed
+    - |
+      if [ "$CI_PIPELINE_SOURCE" = "schedule" ] && [ "${REBUILD:-true}" = "false" ]; then
+        echo "No upstream changes detected, skipping build."
+        exit 0
+      fi
+    - |
+      if echo "${PLATFORMS}" | grep -qv '^linux/amd64$'; then
+        docker run --privileged --rm tonistiigi/binfmt --install all
+      fi
+    - docker context create tls-ctx
+    - |
+      mkdir -p /tmp/buildkit
+      cat > /tmp/buildkit/buildkitd.toml <<TOML
+      [registry."${CI_REGISTRY}"]
+        ca = ["/etc/ssl/certs/ca-certificates.crt"]
+      TOML
+    - |
+      docker buildx create --use --name builder \
+        --config /tmp/buildkit/buildkitd.toml \
+        --driver-opt network=host \
+        --driver-opt "env.http_proxy=${http_proxy:-}" \
+        --driver-opt "env.https_proxy=${https_proxy:-}" \
+        --driver-opt "env.HTTP_PROXY=${HTTP_PROXY:-}" \
+        --driver-opt "env.HTTPS_PROXY=${HTTPS_PROXY:-}" \
+        --driver-opt "env.no_proxy=${BUILDKIT_NO_PROXY:-}" \
+        --driver-opt "env.NO_PROXY=${BUILDKIT_NO_PROXY:-}" \
+        tls-ctx
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        TAG="$CI_COMMIT_TAG"
+        EXTRA_TAGS="-t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest"
+      else
+        TAG="${CI_COMMIT_SHORT_SHA}"
+        EXTRA_TAGS="-t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest"
+      fi
+    - |
+      docker buildx build \
+        --platform "${PLATFORMS}" \
+        --provenance=mode=max \
+        --sbom=true \
+        --build-arg http_proxy="${http_proxy:-}" \
+        --build-arg https_proxy="${https_proxy:-}" \
+        --build-arg HTTP_PROXY="${HTTP_PROXY:-}" \
+        --build-arg HTTPS_PROXY="${HTTPS_PROXY:-}" \
+        --build-arg no_proxy="${no_proxy:-}" \
+        --build-arg NO_PROXY="${NO_PROXY:-}" \
+        --build-arg NGINX_VER="${NGINX_VER:-}" \
+        --build-arg MODSEC_VER="${MODSEC_VER:-}" \
+        --build-arg OWASP_CRS_VER="${CRS_VER:-}" \
+        --secret id=ca-certs,src=/etc/ssl/certs/ca-certificates.crt \
+        --label "org.opencontainers.image.source=${CI_PROJECT_URL}" \
+        --label "org.opencontainers.image.revision=${CI_COMMIT_SHA}" \
+        --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --label "versions=nginx=${NGINX_VER:-auto} modsec=${MODSEC_VER:-auto} crs=${CRS_VER:-auto}" \
+        --cache-from type=registry,ref=${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:buildcache \
+        --cache-to   type=registry,ref=${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:buildcache,mode=max \
+        -t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${TAG} \
+        ${EXTRA_TAGS} \
+        --push \
+        .
+    - docker buildx imagetools inspect ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${TAG} | tee image-digest.txt
+  artifacts:
+    paths:
+      - image-digest.txt
+    expire_in: 30 days
+  tags:
+    - build
+
+# ---------- SIGN (cosign keyless OIDC) ----------------------------------
+sign:
+  stage: sign
+  image: alpine:3.21
+  before_script: []
+  services: []
+  needs: ["build"]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: on_success
+    - when: on_success
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  script:
+    - |
+      if [ ! -f image-digest.txt ]; then
+        echo "No image built (up-to-date), skipping sign."
+        exit 0
+      fi
+    - apk add --no-cache cosign
+    - DIGEST=$(grep -o 'sha256:[a-f0-9]*' image-digest.txt | head -1)
+    - cosign sign --yes ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}@${DIGEST}
+  allow_failure: true
+
+# ---------- SCAN --------------------------------------------------------
+scan:
+  stage: scan
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  before_script: []
+  services: []
+  needs: ["build"]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: on_success
+    - when: on_success
+  script:
+    - |
+      if [ ! -f image-digest.txt ]; then
+        echo "No image built (up-to-date), skipping scan."
+        exit 0
+      fi
+    - export TRIVY_USERNAME="$CI_REGISTRY_USER"
+    - export TRIVY_PASSWORD="$CI_REGISTRY_PASSWORD"
+    - export SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"
+    - trivy image --severity HIGH,CRITICAL --ignore-unfixed
+        --format sarif --output trivy-nginx.sarif
+        ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest
+    - trivy image --severity HIGH,CRITICAL --ignore-unfixed
+        ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest
+  artifacts:
+    paths:
+      - trivy-*.sarif
+    reports:
+      sast: trivy-nginx.sarif
+    expire_in: 90 days
+  allow_failure: true
+
+# ---------- RELEASE (sur tag) -------------------------------------------
+release:tarball:
+  stage: release
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  image: alpine:3.21
+  before_script: []
+  services: []
+  script:
+    - apk add --no-cache tar gzip coreutils
+    - mkdir -p dist
+    - tar --exclude='.git' --exclude='dist'
+          --transform "s,^,nginx-waf-${CI_COMMIT_TAG}/,"
+          -czf dist/nginx-waf-${CI_COMMIT_TAG}.tar.gz .
+    - cd dist && sha256sum nginx-waf-${CI_COMMIT_TAG}.tar.gz > nginx-waf-${CI_COMMIT_TAG}.tar.gz.sha256
+  artifacts:
+    paths:
+      - dist/
+    expire_in: never
