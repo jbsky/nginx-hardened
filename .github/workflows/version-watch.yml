@@ -154,7 +154,7 @@ jobs:
             OWASP_CRS_VER=${{ needs.check.outputs.crs_ver }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:nginx-${{ needs.check.outputs.nginx_ver }}
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.check.outputs.nginx_ver }}
             ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
           labels: |
             versions=nginx=${{ needs.check.outputs.nginx_ver }} modsec=${{ needs.check.outputs.modsec_ver }} crs=${{ needs.check.outputs.crs_ver }}
@@ -228,7 +228,7 @@ jobs:
             ```bash
             docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
             # or pinned:
-            docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:nginx-${{ needs.check.outputs.nginx_ver }}
+            docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.check.outputs.nginx_ver }}
             ```
 
             ### Verify signature

@@ -86,6 +86,24 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
         continue-on-error: true
 
+      - name: Resolve upstream versions
+        id: versions
+        run: |
+          set -euo pipefail
+          NGINX_VER=$(curl -fsSL https://nginx.org/en/download.html \
+            | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          MODSEC_VER=$(curl -fsSL https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
+            | jq -r '.tag_name' | sed 's/^v//')
+          CRS_VER=$(curl -fsSL https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
+            | jq -r '.tag_name' | sed 's/^v//')
+          echo "nginx=${NGINX_VER}" >> "$GITHUB_OUTPUT"
+          echo "modsec=${MODSEC_VER}" >> "$GITHUB_OUTPUT"
+          echo "crs=${CRS_VER}" >> "$GITHUB_OUTPUT"
+          echo "### Resolved versions" >> "$GITHUB_STEP_SUMMARY"
+          echo "- nginx: ${NGINX_VER}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- modsec: ${MODSEC_VER}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- crs: ${CRS_VER}" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v6
@@ -93,6 +111,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}
           tags: |
             type=semver,pattern={{version}}
+            type=raw,value=${{ steps.versions.outputs.nginx }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=
 
@@ -106,7 +125,14 @@ jobs:
           sbom: true
           provenance: mode=max
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.version=${{ steps.versions.outputs.nginx }}
+            versions=nginx=${{ steps.versions.outputs.nginx }} modsec=${{ steps.versions.outputs.modsec }} crs=${{ steps.versions.outputs.crs }}
+          build-args: |
+            NGINX_VER=${{ steps.versions.outputs.nginx }}
+            MODSEC_VER=${{ steps.versions.outputs.modsec }}
+            OWASP_CRS_VER=${{ steps.versions.outputs.crs }}
           cache-from: type=gha,scope=nginx-waf
           cache-to: type=gha,mode=max,scope=nginx-waf
 

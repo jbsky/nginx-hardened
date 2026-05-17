@@ -173,14 +173,35 @@ build:
         --driver-opt "env.no_proxy=${BUILDKIT_NO_PROXY:-}" \
         --driver-opt "env.NO_PROXY=${BUILDKIT_NO_PROXY:-}" \
         tls-ctx
+    # Resolve nginx version for tagging (from version-check env or fetch now)
+    - |
+      if [ -n "${NGINX_VER:-}" ]; then
+        RESOLVED_NGINX="${NGINX_VER}"
+      else
+        RESOLVED_NGINX=$(curl -fsSL https://nginx.org/en/download.html \
+          | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+      fi
+      if [ -n "${MODSEC_VER:-}" ]; then
+        RESOLVED_MODSEC="${MODSEC_VER}"
+      else
+        RESOLVED_MODSEC=$(curl -fsSL https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
+          | grep -o '"tag_name": *"[^"]*"' | sed 's/.*"v\?\([^"]*\)"/\1/')
+      fi
+      if [ -n "${CRS_VER:-}" ]; then
+        RESOLVED_CRS="${CRS_VER}"
+      else
+        RESOLVED_CRS=$(curl -fsSL https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
+          | grep -o '"tag_name": *"[^"]*"' | sed 's/.*"v\?\([^"]*\)"/\1/')
+      fi
+      echo "Building: nginx=${RESOLVED_NGINX} modsec=${RESOLVED_MODSEC} crs=${RESOLVED_CRS}"
     - |
       if [ -n "$CI_COMMIT_TAG" ]; then
         TAG="$CI_COMMIT_TAG"
-        EXTRA_TAGS="-t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest"
       else
-        TAG="${CI_COMMIT_SHORT_SHA}"
-        EXTRA_TAGS="-t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest"
+        TAG="${RESOLVED_NGINX}"
       fi
+      EXTRA_TAGS="-t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest"
+      EXTRA_TAGS="${EXTRA_TAGS} -t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${RESOLVED_NGINX}"
     - |
       docker buildx build \
         --platform "${PLATFORMS}" \
@@ -192,14 +213,15 @@ build:
         --build-arg HTTPS_PROXY="${HTTPS_PROXY:-}" \
         --build-arg no_proxy="${no_proxy:-}" \
         --build-arg NO_PROXY="${NO_PROXY:-}" \
-        --build-arg NGINX_VER="${NGINX_VER:-}" \
-        --build-arg MODSEC_VER="${MODSEC_VER:-}" \
-        --build-arg OWASP_CRS_VER="${CRS_VER:-}" \
+        --build-arg NGINX_VER="${RESOLVED_NGINX}" \
+        --build-arg MODSEC_VER="${RESOLVED_MODSEC}" \
+        --build-arg OWASP_CRS_VER="${RESOLVED_CRS}" \
         --secret id=ca-certs,src=/etc/ssl/certs/ca-certificates.crt \
         --label "org.opencontainers.image.source=${CI_PROJECT_URL}" \
         --label "org.opencontainers.image.revision=${CI_COMMIT_SHA}" \
         --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        --label "versions=nginx=${NGINX_VER:-auto} modsec=${MODSEC_VER:-auto} crs=${CRS_VER:-auto}" \
+        --label "org.opencontainers.image.version=${RESOLVED_NGINX}" \
+        --label "versions=nginx=${RESOLVED_NGINX} modsec=${RESOLVED_MODSEC} crs=${RESOLVED_CRS}" \
         --cache-from type=registry,ref=${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:buildcache \
         --cache-to   type=registry,ref=${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:buildcache,mode=max \
         -t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${TAG} \

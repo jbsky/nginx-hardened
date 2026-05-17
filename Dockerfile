@@ -170,6 +170,10 @@ RUN GEO_DB_RELEASE="${GEO_DB_RELEASE:-$(date +%Y-%m)}" && \
     curl -fsSL "https://download.db-ip.com/free/dbip-country-lite-${GEO_DB_RELEASE}.mmdb.gz" \
       | gzip -d > /etc/nginx/geoip/dbip-country-lite.mmdb
 
+# --- Persist resolved versions for downstream consumption ---
+RUN . /etc/profile.d/ver.sh && \
+    echo "nginx=${NGINX_VER} modsec=${MODSEC_VER} crs=${OWASP_CRS_VER}" > /tmp/image-versions
+
 # ---------------------------------------------------------------------------
 # Stage 2: production — runtime minimal
 # ---------------------------------------------------------------------------
@@ -204,6 +208,7 @@ COPY --from=builder /usr/lib/nginx/modules/ /usr/lib/nginx/modules/
 COPY --from=builder /usr/local/modsecurity/lib/ /usr/local/modsecurity/lib/
 COPY --from=builder /usr/local/owasp-modsecurity-crs/ /usr/local/owasp-modsecurity-crs/
 COPY --from=builder /etc/nginx/geoip/ /etc/nginx/geoip/
+COPY --from=builder /tmp/image-versions /etc/image-versions
 
 # Copy configuration
 COPY --chown=nginx:nginx errors/ /usr/share/nginx/errors/
