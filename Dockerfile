@@ -103,17 +103,15 @@ RUN . /etc/profile.d/ver.sh && \
     fi
 
 # --- Download + GPG verify + compile Nginx ---
-ARG GPG_KEYS=B0F4253373F8F6F510D42178520A9993A1C052F8
+COPY keys/ /tmp/gpg-keys/
 
 RUN . /etc/profile.d/ver.sh && \
     curl -fsSL "https://nginx.org/download/nginx-${NGINX_VER}.tar.gz" -o /tmp/nginx.tar.gz && \
     curl -fsSL "https://nginx.org/download/nginx-${NGINX_VER}.tar.gz.asc" -o /tmp/nginx.tar.gz.asc && \
     GNUPGHOME="$(mktemp -d)" && export GNUPGHOME && \
-    for server in hkps://keys.openpgp.org hkps://keyserver.ubuntu.com:443; do \
-      gpg --keyserver "$server" --recv-keys "$GPG_KEYS" && break || true; \
-    done && \
+    gpg --batch --import /tmp/gpg-keys/*.key && \
     gpg --batch --verify /tmp/nginx.tar.gz.asc /tmp/nginx.tar.gz && \
-    rm -rf "$GNUPGHOME" /tmp/nginx.tar.gz.asc && \
+    rm -rf "$GNUPGHOME" /tmp/nginx.tar.gz.asc /tmp/gpg-keys && \
     tar -xzC /usr/src -f /tmp/nginx.tar.gz && rm /tmp/nginx.tar.gz
 
 # Compile Nginx with hardening flags
