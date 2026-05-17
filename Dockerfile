@@ -10,12 +10,13 @@
 #  Proxy-aware: passe http_proxy/https_proxy via les predefined ARGs
 #  BuildKit (non baked dans l'image finale).
 # =====================================================================
-# hadolint global ignore=DL3018
 
 # ---------------------------------------------------------------------------
 # Stage 0: fetcher — résout les dernières versions stables
 # ---------------------------------------------------------------------------
 FROM alpine:3.23 AS fetcher
+
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
 RUN apk add --no-cache curl jq grep
 
@@ -23,7 +24,6 @@ ARG NGINX_VER=""
 ARG MODSEC_VER=""
 ARG OWASP_CRS_VER=""
 
-# hadolint ignore=SC2015
 RUN set -eux; \
     if [ -z "$NGINX_VER" ]; then \
       NGINX_VER=$(curl -fsSL https://nginx.org/en/download.html \
@@ -46,6 +46,8 @@ RUN set -eux; \
 # Stage 1: builder — compile tout from source
 # ---------------------------------------------------------------------------
 FROM alpine:3.23 AS builder
+
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
 # Trust homelab CA if provided (for builds behind SSL-bumping proxy)
 RUN --mount=type=secret,id=ca-certs,target=/tmp/ca-bundle.crt,required=false \
@@ -106,7 +108,7 @@ ARG GPG_KEYS=B0F4253373F8F6F510D42178520A9993A1C052F8
 RUN . /etc/profile.d/ver.sh && \
     curl -fsSL "https://nginx.org/download/nginx-${NGINX_VER}.tar.gz" -o /tmp/nginx.tar.gz && \
     curl -fsSL "https://nginx.org/download/nginx-${NGINX_VER}.tar.gz.asc" -o /tmp/nginx.tar.gz.asc && \
-    export GNUPGHOME="$(mktemp -d)" && \
+    GNUPGHOME="$(mktemp -d)" && export GNUPGHOME && \
     for server in hkps://keys.openpgp.org hkps://keyserver.ubuntu.com:443; do \
       gpg --keyserver "$server" --recv-keys "$GPG_KEYS" && break || true; \
     done && \
@@ -178,6 +180,8 @@ RUN . /etc/profile.d/ver.sh && \
 # Stage 2: production — runtime minimal
 # ---------------------------------------------------------------------------
 FROM alpine:3.23 AS production
+
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
 LABEL org.opencontainers.image.title="nginx-waf-hardened" \
       org.opencontainers.image.description="Hardened Nginx + ModSecurity v3 + OWASP CRS + GeoIP2 + VTS" \
