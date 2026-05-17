@@ -21,8 +21,11 @@ stages:
 
 variables:
   DOCKER_BUILDKIT: "1"
-  IMAGE: $CI_REGISTRY_IMAGE
+  REGISTRY: $CI_REGISTRY
+  IMAGE_NAMESPACE: $CI_PROJECT_PATH
+  IMAGE_NAME: nginx-waf-hardened
   COSIGN_EXPERIMENTAL: "1"
+  PLATFORMS: "linux/amd64"   # arm64 available as manual job
 
 default:
   image: docker:27
@@ -73,7 +76,7 @@ version-check:
       export TRIVY_PASSWORD="$CI_REGISTRY_PASSWORD"
 
       CURRENT_LABELS=$(curl -fsSL -u "${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD}" \
-        "https://${CI_REGISTRY}/v2/${CI_PROJECT_PATH}/manifests/latest" \
+        "https://${CI_REGISTRY}/v2/${IMAGE_NAMESPACE}/${IMAGE_NAME}/manifests/latest" \
         -H "Accept: application/vnd.oci.image.manifest.v1+json" 2>/dev/null | \
         jq -r '.annotations["versions"] // empty' || echo "")
 
@@ -136,10 +139,8 @@ shellcheck:
 build:
   stage: build
   rules:
-    # On schedule: only run if version-check says REBUILD=true
     - if: $CI_PIPELINE_SOURCE == "schedule"
       when: on_success
-    # On push/tag/MR: always run
     - when: on_success
   script:
     - apk add --no-cache git curl grep jq
@@ -149,7 +150,30 @@ build:
         echo "No upstream changes detected, skipping build."
         exit 0
       fi
-    # Resolve nginx version for tagging (from version-check env or fetch now)
+    # binfmt only needed for cross-arch (arm64)
+    - |
+      if echo "${PLATFORMS}" | grep -qv '^linux/amd64$'; then
+        docker run --privileged --rm tonistiigi/binfmt --install all
+      fi
+    - docker context create tls-ctx
+    - |
+      mkdir -p /tmp/buildkit
+      cat > /tmp/buildkit/buildkitd.toml <<TOML
+      [registry."${CI_REGISTRY}"]
+        ca = ["/etc/ssl/certs/ca-certificates.crt"]
+      TOML
+    - |
+      docker buildx create --use --name builder \
+        --config /tmp/buildkit/buildkitd.toml \
+        --driver-opt network=host \
+        --driver-opt "env.http_proxy=${http_proxy:-}" \
+        --driver-opt "env.https_proxy=${https_proxy:-}" \
+        --driver-opt "env.HTTP_PROXY=${HTTP_PROXY:-}" \
+        --driver-opt "env.HTTPS_PROXY=${HTTPS_PROXY:-}" \
+        --driver-opt "env.no_proxy=${BUILDKIT_NO_PROXY:-}" \
+        --driver-opt "env.NO_PROXY=${BUILDKIT_NO_PROXY:-}" \
+        tls-ctx
+    # Resolve nginx version for tagging
     - |
       if [ -n "${NGINX_VER:-}" ]; then
         RESOLVED_NGINX="${NGINX_VER}"
@@ -173,14 +197,17 @@ build:
       echo "Building: nginx=${RESOLVED_NGINX} modsec=${RESOLVED_MODSEC} crs=${RESOLVED_CRS}"
     - |
       if [ -n "$CI_COMMIT_TAG" ]; then
-        TAG="$CI_COMMIT_TAG"
+        TAG="${RESOLVED_NGINX}"
+        EXTRA_TAGS="-t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest -t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${CI_COMMIT_TAG}"
       else
         TAG="${RESOLVED_NGINX}"
+        EXTRA_TAGS="-t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest"
       fi
-    # Build with DOCKER_BUILDKIT (no separate builder container = auth works)
     - |
-      docker build \
-        --build-arg BUILDKIT_INLINE_CACHE=1 \
+      docker buildx build \
+        --platform "${PLATFORMS}" \
+        --provenance=mode=max \
+        --sbom=true \
         --build-arg http_proxy="${http_proxy:-}" \
         --build-arg https_proxy="${https_proxy:-}" \
         --build-arg HTTP_PROXY="${HTTP_PROXY:-}" \
@@ -190,26 +217,34 @@ build:
         --build-arg NGINX_VER="${RESOLVED_NGINX}" \
         --build-arg MODSEC_VER="${RESOLVED_MODSEC}" \
         --build-arg OWASP_CRS_VER="${RESOLVED_CRS}" \
+        --secret id=ca-certs,src=/etc/ssl/certs/ca-certificates.crt \
         --label "org.opencontainers.image.source=${CI_PROJECT_URL}" \
         --label "org.opencontainers.image.revision=${CI_COMMIT_SHA}" \
         --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --label "org.opencontainers.image.version=${RESOLVED_NGINX}" \
         --label "versions=nginx=${RESOLVED_NGINX} modsec=${RESOLVED_MODSEC} crs=${RESOLVED_CRS}" \
-        -t ${IMAGE}:${TAG} \
-        -t ${IMAGE}:${RESOLVED_NGINX} \
-        -t ${IMAGE}:latest \
+        --cache-from type=registry,ref=${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:buildcache \
+        --cache-to   type=registry,ref=${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:buildcache,mode=max \
+        -t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${TAG} \
+        ${EXTRA_TAGS} \
+        --push \
         .
-    # Push all tags
-    - docker push ${IMAGE}:${TAG}
-    - docker push ${IMAGE}:${RESOLVED_NGINX}
-    - docker push ${IMAGE}:latest
-    - docker inspect ${IMAGE}:${TAG} | jq -r '.[0].RepoDigests[0]' | tee image-digest.txt
+    - docker buildx imagetools inspect ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${TAG} | tee image-digest.txt
   artifacts:
     paths:
       - image-digest.txt
     expire_in: 30 days
   tags:
     - build
+
+# Build ARM64 (manual trigger)
+build:arm64:
+  stage: build
+  when: manual
+  allow_failure: true
+  variables:
+    PLATFORMS: "linux/amd64,linux/arm64"
+  extends: build
 
 # ---------- SIGN (cosign keyless OIDC) ----------------------------------
 sign:
@@ -233,7 +268,7 @@ sign:
       fi
     - apk add --no-cache cosign
     - DIGEST=$(grep -o 'sha256:[a-f0-9]*' image-digest.txt | sed -n '1p')
-    - cosign sign --yes ${IMAGE}@${DIGEST}
+    - cosign sign --yes ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}@${DIGEST}
   allow_failure: true
 
 # ---------- SCAN --------------------------------------------------------
@@ -260,9 +295,9 @@ scan:
     - export SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"
     - trivy image --severity HIGH,CRITICAL --ignore-unfixed
         --format sarif --output trivy-nginx.sarif
-        ${IMAGE}:latest
+        ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest
     - trivy image --severity HIGH,CRITICAL --ignore-unfixed
-        ${IMAGE}:latest
+        ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest
   artifacts:
     paths:
       - trivy-*.sarif
