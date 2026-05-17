@@ -112,6 +112,7 @@ RUN . /etc/profile.d/ver.sh && \
     gpg --batch --import /tmp/gpg-keys/*.key && \
     gpg --batch --verify /tmp/nginx.tar.gz.asc /tmp/nginx.tar.gz && \
     rm -rf "$GNUPGHOME" /tmp/nginx.tar.gz.asc /tmp/gpg-keys && \
+    mkdir -p /usr/src && \
     tar -xzC /usr/src -f /tmp/nginx.tar.gz && rm /tmp/nginx.tar.gz
 
 # Compile Nginx with hardening flags
