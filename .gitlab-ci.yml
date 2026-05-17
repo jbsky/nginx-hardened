@@ -21,9 +21,7 @@ stages:
 
 variables:
   DOCKER_BUILDKIT: "1"
-  REGISTRY: $CI_REGISTRY
-  IMAGE_NAMESPACE: $CI_PROJECT_PATH
-  IMAGE_NAME: nginx-waf-hardened
+  IMAGE: $CI_REGISTRY_IMAGE
   COSIGN_EXPERIMENTAL: "1"
   PLATFORMS: "linux/amd64"
 
@@ -76,7 +74,7 @@ version-check:
       export TRIVY_PASSWORD="$CI_REGISTRY_PASSWORD"
 
       CURRENT_LABELS=$(curl -fsSL -u "${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD}" \
-        "https://${CI_REGISTRY}/v2/${IMAGE_NAMESPACE}/${IMAGE_NAME}/manifests/latest" \
+        "https://${CI_REGISTRY}/v2/${CI_PROJECT_PATH}/manifests/latest" \
         -H "Accept: application/vnd.oci.image.manifest.v1+json" 2>/dev/null | \
         jq -r '.annotations["versions"] // empty' || echo "")
 
@@ -202,8 +200,8 @@ build:
       else
         TAG="${RESOLVED_NGINX}"
       fi
-      EXTRA_TAGS="-t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest"
-      EXTRA_TAGS="${EXTRA_TAGS} -t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${RESOLVED_NGINX}"
+      EXTRA_TAGS="-t ${IMAGE}:latest"
+      EXTRA_TAGS="${EXTRA_TAGS} -t ${IMAGE}:${RESOLVED_NGINX}"
     - |
       docker buildx build \
         --platform "${PLATFORMS}" \
@@ -224,13 +222,13 @@ build:
         --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --label "org.opencontainers.image.version=${RESOLVED_NGINX}" \
         --label "versions=nginx=${RESOLVED_NGINX} modsec=${RESOLVED_MODSEC} crs=${RESOLVED_CRS}" \
-        --cache-from type=registry,ref=${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:buildcache \
-        --cache-to   type=registry,ref=${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:buildcache,mode=max \
-        -t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${TAG} \
+        --cache-from type=registry,ref=${IMAGE}:buildcache \
+        --cache-to   type=registry,ref=${IMAGE}:buildcache,mode=max \
+        -t ${IMAGE}:${TAG} \
         ${EXTRA_TAGS} \
         --push \
         .
-    - docker buildx imagetools inspect ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${TAG} | tee image-digest.txt
+    - docker buildx imagetools inspect ${IMAGE}:${TAG} | tee image-digest.txt
   artifacts:
     paths:
       - image-digest.txt
@@ -260,7 +258,7 @@ sign:
       fi
     - apk add --no-cache cosign
     - DIGEST=$(grep -o 'sha256:[a-f0-9]*' image-digest.txt | sed -n '1p')
-    - cosign sign --yes ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}@${DIGEST}
+    - cosign sign --yes ${IMAGE}@${DIGEST}
   allow_failure: true
 
 # ---------- SCAN --------------------------------------------------------
@@ -287,9 +285,9 @@ scan:
     - export SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"
     - trivy image --severity HIGH,CRITICAL --ignore-unfixed
         --format sarif --output trivy-nginx.sarif
-        ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest
+        ${IMAGE}:latest
     - trivy image --severity HIGH,CRITICAL --ignore-unfixed
-        ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest
+        ${IMAGE}:latest
   artifacts:
     paths:
       - trivy-*.sarif
