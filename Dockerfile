@@ -220,7 +220,6 @@ COPY --chown=nginx:nginx errors/ /usr/share/nginx/errors/
 COPY --chown=root:nginx conf/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY --chown=root:nginx conf/nginx/conf.d/ /etc/nginx/conf.d/
 COPY --chown=root:nginx conf/modsec/ /etc/nginx/modsec/
-COPY --chown=root:nginx conf/owasp/ /usr/local/owasp-modsecurity-crs/
 
 # Harden + link libs
 RUN chmod 755 /usr/sbin/nginx && \
