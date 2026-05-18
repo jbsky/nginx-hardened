@@ -212,7 +212,7 @@ jobs:
           git push origin "${{ needs.rebuild.outputs.tag }}"
 
       - name: Create GitHub Release (notification trigger)
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.rebuild.outputs.tag }}
           name: "Auto-update: Nginx ${{ needs.check.outputs.nginx_ver }} + ModSec ${{ needs.check.outputs.modsec_ver }}"
