@@ -207,6 +207,8 @@ build:
     - |
       docker buildx build \
         --platform "${PLATFORMS}" \
+        --provenance=mode=max \
+        --sbom=true \
         --build-arg http_proxy="${http_proxy:-}" \
         --build-arg https_proxy="${https_proxy:-}" \
         --build-arg HTTP_PROXY="${HTTP_PROXY:-}" \
@@ -222,18 +224,13 @@ build:
         --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --label "org.opencontainers.image.version=${RESOLVED_NGINX}" \
         --label "versions=nginx=${RESOLVED_NGINX} modsec=${RESOLVED_MODSEC} crs=${RESOLVED_CRS}" \
+        --cache-from type=registry,ref=${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:buildcache \
+        --cache-to   type=registry,ref=${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:buildcache,mode=max \
         -t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${TAG} \
         ${EXTRA_TAGS} \
-        --load \
+        --push \
         .
-    # Push with docker (uses docker login credentials directly)
-    - docker push ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${TAG}
-    - docker push ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest
-    - |
-      if [ -n "$CI_COMMIT_TAG" ]; then
-        docker push ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${CI_COMMIT_TAG}
-      fi
-    - docker inspect ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${TAG} | jq -r '.[0].RepoDigests[0]' | tee image-digest.txt
+    - docker buildx imagetools inspect ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:${TAG} | tee image-digest.txt
   artifacts:
     paths:
       - image-digest.txt

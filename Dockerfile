@@ -1,8 +1,12 @@
 # =====================================================================
 #  Nginx WAF Hardened — Multi-stage build
-#  - Stage 1 (fetcher):  Résout les dernières versions stables
-#  - Stage 2 (builder):  Compile Nginx + ModSecurity + modules
-#  - Stage 3 (production): Runtime minimal Alpine
+#  5-stage: fetcher -> builder -> gobuilder -> prep -> FROM scratch
+#  Conformite Docker Hardened Image :
+#   - FROM scratch final stage: zero shell, zero package manager
+#   - utilisateur non-root (uid 1999)
+#   - binaires strip + RELRO + PIE + stack-protector
+#   - entrypoint + healthcheck en binaire Go statique
+#   - tini-static PID 1
 #
 #  Auto-versioning: si NGINX_VER/MODSEC_VER/OWASP_CRS_VER ne sont pas
 #  fournis en build-arg, le fetcher interroge les APIs upstream.
@@ -12,7 +16,7 @@
 # =====================================================================
 
 # ---------------------------------------------------------------------------
-# Stage 0: fetcher — résout les dernières versions stables
+# Stage 0: fetcher — resout les dernieres versions stables
 # ---------------------------------------------------------------------------
 FROM alpine:3.23 AS fetcher
 
@@ -148,7 +152,7 @@ RUN . /etc/profile.d/ver.sh && \
       --with-stream --with-stream_ssl_module \
       --with-stream_ssl_preread_module \
       --with-stream_realip_module \
-      --with-cc-opt='-Os -fstack-protector-strong -fPIC -D_FORTIFY_SOURCE=2' \
+      --with-cc-opt='-Os -fstack-protector-strong -fstack-clash-protection -fPIC -D_FORTIFY_SOURCE=2' \
       --with-ld-opt='-Wl,-z,relro,-z,now,-z,noexecstack -pie' \
       --without-http_autoindex_module \
       --without-http_ssi_module \
@@ -177,36 +181,32 @@ RUN . /etc/profile.d/ver.sh && \
     echo "nginx=${NGINX_VER} modsec=${MODSEC_VER} crs=${OWASP_CRS_VER}" > /tmp/image-versions
 
 # ---------------------------------------------------------------------------
-# Stage 2: production — runtime minimal
+# Stage 2: Go builder (entrypoint + healthcheck)
 # ---------------------------------------------------------------------------
-FROM alpine:3.23 AS production
+FROM golang:1.26-alpine AS gobuilder
+WORKDIR /build
+COPY go.mod init.go ./
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags='-s -w' -o /init .
+
+# ---------------------------------------------------------------------------
+# Stage 3: prep (assemble runtime filesystem)
+# ---------------------------------------------------------------------------
+FROM alpine:3.23 AS prep
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
-LABEL org.opencontainers.image.title="nginx-waf-hardened" \
-      org.opencontainers.image.description="Hardened Nginx + ModSecurity v3 + OWASP CRS + GeoIP2 + VTS" \
-      org.opencontainers.image.vendor="jbsky" \
-      org.opencontainers.image.licenses="MIT"
+# 1/2  Core runtime libs
+RUN sed -i 's|https://|http://|g' /etc/apk/repositories \
+ && apk add --no-cache \
+        ca-certificates libcurl libgcc libmaxminddb libstdc++ \
+        libxml2 lmdb openssl pcre2 tzdata yajl zlib geoip \
+        tini-static
 
-# Runtime deps only
-RUN apk add --no-cache \
-    ca-certificates curl libcurl libgcc libmaxminddb libstdc++ \
-    libxml2 lmdb openssl pcre2 tzdata yajl zlib geoip && \
-    addgroup -g 1999 -S nginx && \
-    adduser -S -D -H -u 1999 -h /var/cache/nginx -s /sbin/nologin -G nginx nginx && \
-    mkdir -p /var/log/nginx /var/cache/nginx/client_temp /var/cache/nginx/proxy_temp \
-             /var/cache/nginx/fastcgi_temp /var/cache/nginx/uwsgi_temp \
-             /var/cache/nginx/scgi_temp /var/run/nginx \
-             /var/lib/modsecurity/tmp /var/lib/modsecurity/data \
-             /etc/nginx/conf.d /etc/nginx/modsec /etc/nginx/geoip \
-             /usr/lib/nginx/modules /usr/share/nginx/html /usr/share/nginx/errors \
-             /var/www/html && \
-    chown -R nginx:nginx /var/log/nginx /var/cache/nginx /var/run/nginx \
-                         /var/lib/modsecurity /usr/share/nginx /var/www/html && \
-    ln -sf /dev/stdout /var/log/nginx/access.log && \
-    ln -sf /dev/stderr /var/log/nginx/error.log
+# 2/2  Create user
+RUN addgroup -g 1999 -S nginx \
+ && adduser -S -D -H -u 1999 -h /var/cache/nginx -s /sbin/nologin -G nginx nginx
 
-# Copy from builder
+# Nginx binary + modules from builder
 COPY --from=builder /usr/sbin/nginx /usr/sbin/nginx
 COPY --from=builder /usr/lib/nginx/modules/ /usr/lib/nginx/modules/
 COPY --from=builder /usr/local/modsecurity/lib/ /usr/local/modsecurity/lib/
@@ -221,19 +221,77 @@ COPY --chown=root:nginx conf/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY --chown=root:nginx conf/nginx/conf.d/ /etc/nginx/conf.d/
 COPY --chown=root:nginx conf/modsec/ /etc/nginx/modsec/
 
-# Harden + link libs
-RUN chmod 755 /usr/sbin/nginx && \
-    chmod 644 /etc/nginx/nginx.conf /etc/nginx/conf.d/*.conf /etc/nginx/modsec/* && \
-    chmod 755 /usr/lib/nginx/modules/*.so && \
-    ln -sf /usr/lib/nginx/modules /etc/nginx/modules && \
-    touch /var/run/nginx/nginx.pid && chown nginx:nginx /var/run/nginx/nginx.pid && \
-    printf '/lib\n/usr/local/lib\n/usr/lib\n/usr/local/modsecurity/lib\n' > /etc/ld-musl-x86_64.path
+# Harden: permissions + link libs
+RUN chmod 755 /usr/sbin/nginx \
+ && chmod 644 /etc/nginx/nginx.conf /etc/nginx/conf.d/*.conf /etc/nginx/modsec/* \
+ && chmod 755 /usr/lib/nginx/modules/*.so \
+ && ln -sf /usr/lib/nginx/modules /etc/nginx/modules \
+ && printf '/lib\n/usr/local/lib\n/usr/lib\n/usr/local/modsecurity/lib\n' > /etc/ld-musl-x86_64.path
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:80/healthz || exit 1
+# Strip APK/package-manager artifacts
+RUN rm -rf /lib/apk /lib/libapk* /var/cache/apk /etc/apk /sbin/apk
 
-WORKDIR /var/www/html
+# ---------------------------------------------------------------------------
+# Stage 4: FROM scratch (final hardened image)
+# ---------------------------------------------------------------------------
+FROM scratch
+
+LABEL org.opencontainers.image.title="nginx-waf-hardened" \
+      org.opencontainers.image.description="Nginx WAF FROM scratch — ModSecurity v3, OWASP CRS, non-root, zero shell" \
+      org.opencontainers.image.vendor="jbsky" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/jbsky/nginx-waf-hardened"
+
+# User accounts
+COPY --link --from=prep /etc/passwd /etc/passwd
+COPY --link --from=prep /etc/group  /etc/group
+
+# Dynamic linker (musl) + shared libraries
+COPY --link --from=prep /lib/ /lib/
+COPY --link --from=prep /usr/lib/ /usr/lib/
+
+# ModSecurity shared libraries
+COPY --link --from=prep /usr/local/modsecurity/lib/ /usr/local/modsecurity/lib/
+
+# Nginx binary + modules
+COPY --link --from=prep /usr/sbin/nginx /usr/sbin/nginx
+COPY --link --from=prep /usr/lib/nginx/modules/ /usr/lib/nginx/modules/
+COPY --link --from=prep /etc/nginx/ /etc/nginx/
+
+# OWASP CRS rules
+COPY --link --from=prep /usr/local/owasp-modsecurity-crs/ /usr/local/owasp-modsecurity-crs/
+
+# Custom error pages + html
+COPY --link --from=prep /usr/share/nginx/ /usr/share/nginx/
+
+# Version info
+COPY --link --from=prep /etc/image-versions /etc/image-versions
+
+# Musl library path config
+COPY --link --from=prep /etc/ld-musl-x86_64.path /etc/ld-musl-x86_64.path
+
+# TLS trust store + timezone data
+COPY --link --from=prep /etc/ssl/ /etc/ssl/
+COPY --link --from=prep /usr/share/zoneinfo/ /usr/share/zoneinfo/
+
+# PID 1 — tini-static (no musl dependency for PID 1 reliability)
+COPY --link --from=prep /sbin/tini-static /sbin/tini
+
+# Go init binary (static, entrypoint + healthcheck + setup-dirs)
+COPY --link --from=gobuilder /init /usr/local/bin/init
+
+# Create runtime directories with correct ownership (no shell needed)
+RUN ["/usr/local/bin/init", "--setup-dirs"]
+
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+USER 1999:1999
+
 EXPOSE 80 443
 STOPSIGNAL SIGQUIT
-USER nginx
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["/usr/local/bin/init", "--healthcheck"]
+
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/init"]
 CMD ["nginx", "-g", "daemon off;"]
