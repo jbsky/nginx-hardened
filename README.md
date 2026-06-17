@@ -81,10 +81,12 @@ nginx-hardened/
 │   ├── check-versions.sh  # Resolution auto des versions upstream
 │   ├── deploy.sh          # Build/scan/sbom helper
 │   └── test.sh            # Smoke tests
-└── .github/workflows/
-    ├── build-push.yml      # Build + sign + scan + release
-    ├── version-watch.yml   # Daily upstream version detection
-    └── security-audit.yml  # Weekly Trivy + Grype
+└── .github/
+    ├── dependabot.yml      # Weekly GH Actions + Docker updates
+    └── workflows/
+        ├── build-push.yml      # Build + sign + scan + release
+        ├── version-watch.yml   # Daily upstream version detection
+        └── security-audit.yml  # Weekly Trivy + Grype
 ```
 
 ## CI/CD
