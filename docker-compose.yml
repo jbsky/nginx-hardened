@@ -1,0 +1,61 @@
+# =====================================================================
+#  Stack Nginx WAF Hardened
+# =====================================================================
+
+x-common-security: &common-security
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  ulimits:
+    nofile:
+      soft: 65536
+      hard: 65536
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "5"
+
+services:
+  nginx:
+    <<: *common-security
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: docker.io/jbsky/nginx-waf-hardened:latest
+    container_name: nginx-waf
+    hostname: nginx-waf
+    cap_add:
+      - NET_BIND_SERVICE
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      web:
+        aliases: [nginx]
+    volumes:
+      - ./conf/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./conf/modsec:/etc/nginx/modsec:ro
+      - html:/var/www/html
+      - nginx_log:/var/log/nginx
+    tmpfs:
+      - /tmp:size=64m,mode=1777,nodev,nosuid,noexec
+      - /var/run/nginx:size=1m,mode=0755,uid=1999,gid=1999
+      - /var/cache/nginx:size=128m,mode=0755,uid=1999,gid=1999
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  web:
+    driver: bridge
+
+volumes:
+  html:       { driver: local }
+  nginx_log:  { driver: local }

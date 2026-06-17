@@ -1,0 +1,89 @@
+# =====================================================================
+#  Audit sécurité hebdomadaire
+#  - Trivy (CVE + secrets + misconfig)
+#  - Grype (cross-check)
+#  - Vérification signature cosign
+# =====================================================================
+name: security-audit
+
+on:
+  schedule:
+    - cron: '0 3 * * 2'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ${{ github.repository_owner }}
+  IMAGE_NAME: nginx-waf-hardened
+
+permissions:
+  contents: read
+  security-events: write
+  packages: read
+
+jobs:
+  audit:
+    name: Audit nginx-waf-hardened
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Trivy full scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
+          format: sarif
+          output: trivy-nginx.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          scanners: vuln,secret,misconfig
+          ignore-unfixed: false
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-nginx.sarif
+          category: audit-nginx
+
+      - name: Trivy summary
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
+          format: table
+          severity: CRITICAL,HIGH
+
+      - name: Install Grype
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Grype scan
+        run: |
+          grype ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest \
+                --fail-on high --only-fixed || true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Verify cosign signature
+        run: |
+          cosign verify ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+  notify:
+    name: Notification si echec
+    needs: audit
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Issue automatique
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const today = new Date().toISOString().split('T')[0];
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Security] Weekly audit failed - ${today}`,
+              body: `Audit du ${today} a detecte des CVE. Voir Security tab.\n\n${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/security/code-scanning`,
+              labels: ['security','automated']
+            });

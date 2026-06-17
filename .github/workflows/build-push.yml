@@ -1,0 +1,243 @@
+# =====================================================================
+#  Build & Push – Nginx WAF Hardened
+#  Standard Dockerfile multi-stage → ghcr.io
+#  Lint + Build + Sign (cosign OIDC) + Scan (Trivy) + Release
+# =====================================================================
+name: build-push
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+    paths:
+      - 'Dockerfile'
+      - 'conf/**'
+      - 'errors/**'
+      - '.github/workflows/build-push.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  NAMESPACE: ${{ github.repository_owner }}
+  IMAGE_NAME: nginx-waf-hardened
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  security-events: write
+  attestations: write
+
+jobs:
+  # -------------------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Hadolint
+        uses: hadolint/hadolint-action@v3.3.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning
+
+      - name: ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: ./scripts
+
+  # -------------------------------------------------------------------
+  build:
+    name: Build & Push
+    needs: lint
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64,amd64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: image=moby/buildkit:latest
+
+      - name: Login ghcr.io
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check Docker Hub credentials
+        id: dockerhub
+        run: |
+          if [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Login Docker Hub
+        if: steps.dockerhub.outputs.available == 'true'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve upstream versions
+        id: versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          NGINX_VER=$(curl -fsSL https://nginx.org/en/download.html \
+            | grep -oP 'Stable version</h4>.*?Legacy' \
+            | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
+          MODSEC_VER=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
+            | jq -r '.tag_name' | sed 's/^v//')
+          CRS_VER=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
+            | jq -r '.tag_name' | sed 's/^v//')
+          echo "nginx=${NGINX_VER}" >> "$GITHUB_OUTPUT"
+          echo "modsec=${MODSEC_VER}" >> "$GITHUB_OUTPUT"
+          echo "crs=${CRS_VER}" >> "$GITHUB_OUTPUT"
+          echo "### Resolved versions" >> "$GITHUB_STEP_SUMMARY"
+          echo "- nginx: ${NGINX_VER}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- modsec: ${MODSEC_VER}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- crs: ${CRS_VER}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compute Docker Hub image name
+        id: dockerhub-image
+        if: steps.dockerhub.outputs.available == 'true'
+        env:
+          DOCKERHUB_NS: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: echo "image=docker.io/${DOCKERHUB_NS}/${{ env.IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}
+            ${{ steps.dockerhub-image.outputs.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=${{ steps.versions.outputs.nginx }}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=
+
+      - name: Build & Push
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.version=${{ steps.versions.outputs.nginx }}
+            versions=nginx=${{ steps.versions.outputs.nginx }} modsec=${{ steps.versions.outputs.modsec }} crs=${{ steps.versions.outputs.crs }}
+          build-args: |
+            NGINX_VER=${{ steps.versions.outputs.nginx }}
+            MODSEC_VER=${{ steps.versions.outputs.modsec }}
+            OWASP_CRS_VER=${{ steps.versions.outputs.crs }}
+          cache-from: type=gha,scope=nginx-waf
+          cache-to: type=gha,mode=max,scope=nginx-waf
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image (OIDC keyless)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${DIGEST}"
+
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: sarif
+          output: trivy-nginx.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+          ignore-unfixed: true
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-nginx.sarif
+          category: nginx-waf
+
+      - name: GitHub SLSA Attestation
+        if: "!startsWith(github.ref, 'refs/heads/dependabot/')"
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Summary
+        env:
+          HAS_DOCKERHUB: ${{ steps.dockerhub.outputs.available }}
+          DOCKERHUB_NS: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          echo "### nginx-waf-hardened" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          if [ "$HAS_DOCKERHUB" = "true" ]; then
+            echo "docker pull docker.io/${DOCKERHUB_NS}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "cosign verify ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }} \\" >> $GITHUB_STEP_SUMMARY
+          echo "  --certificate-identity-regexp '^https://github.com/${{ github.repository }}/' \\" >> $GITHUB_STEP_SUMMARY
+          echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # -------------------------------------------------------------------
+  release:
+    name: GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Tarball + checksums
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          tar --exclude='.git' --exclude='dist' \
+              -czf "dist/nginx-waf-${VERSION}.tar.gz" \
+              --transform "s,^,nginx-waf-${VERSION}/," \
+              $(ls -A | grep -v -E '^(\.git|dist)$')
+          cd dist
+          sha256sum "nginx-waf-${VERSION}.tar.gz" > "nginx-waf-${VERSION}.sha256"
+          sha512sum "nginx-waf-${VERSION}.tar.gz" > "nginx-waf-${VERSION}.sha512"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          files: |
+            dist/nginx-waf-${{ github.ref_name }}.tar.gz
+            dist/nginx-waf-${{ github.ref_name }}.sha256
+            dist/nginx-waf-${{ github.ref_name }}.sha512
