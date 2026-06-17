@@ -163,8 +163,14 @@ jobs:
       - name: Sign image (OIDC keyless)
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          HAS_DOCKERHUB: ${{ steps.dockerhub.outputs.available }}
+          DOCKERHUB_NS: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           cosign sign --yes "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${DIGEST}"
+          if [ "$HAS_DOCKERHUB" = "true" ]; then
+            COSIGN_REPOSITORY="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}" \
+              cosign sign --yes "docker.io/${DOCKERHUB_NS}/${{ env.IMAGE_NAME }}@${DIGEST}"
+          fi
 
       - name: Trivy scan
         uses: aquasecurity/trivy-action@v0.36.0

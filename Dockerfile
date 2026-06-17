@@ -240,7 +240,9 @@ LABEL org.opencontainers.image.title="nginx-waf-hardened" \
       org.opencontainers.image.description="Nginx WAF FROM scratch — ModSecurity v3, OWASP CRS, non-root, zero shell" \
       org.opencontainers.image.vendor="jbsky" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.source="https://github.com/jbsky/nginx-waf-hardened"
+      org.opencontainers.image.source="https://github.com/jbsky/nginx-waf-hardened" \
+      security.hardening.tier="platine" \
+      security.hardening.features="from-scratch,go-init,tini-pid1,zero-shell,non-root,compiler-hardening,cosign-signed,sbom,slsa-provenance"
 
 # User accounts
 COPY --link --from=prep /etc/passwd /etc/passwd

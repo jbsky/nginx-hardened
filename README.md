@@ -1,5 +1,9 @@
 # Nginx WAF Hardened
 
+[![Build](https://github.com/jbsky/nginx-hardened/actions/workflows/build-push.yml/badge.svg)](https://github.com/jbsky/nginx-hardened/actions/workflows/build-push.yml)
+[![Docker Hub](https://img.shields.io/docker/v/jbsky/nginx-waf-hardened?sort=semver&label=Docker%20Hub)](https://hub.docker.com/r/jbsky/nginx-waf-hardened)
+[![Hardening](https://img.shields.io/badge/hardening-platine-blueviolet)](https://github.com/jbsky/nginx-hardened#security--verification)
+
 Image Docker Nginx compilee from source avec :
 
 - **ModSecurity v3** — WAF en mode blocking
@@ -60,3 +64,38 @@ Rebuild hebdomadaire automatique pour capter les nouvelles versions upstream.
 ## Monitoring
 
 Module VTS sur `/vts-status` (restreint aux IPs privees).
+
+## Security & Verification
+
+This image is signed with [cosign](https://github.com/sigstore/cosign) using keyless OIDC (Sigstore).
+
+### Verify image signature
+
+```bash
+# From ghcr.io (signatures stored natively)
+cosign verify \
+  --certificate-identity-regexp '^https://github.com/jbsky/nginx-hardened/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/jbsky/nginx-waf-hardened:latest
+
+# From Docker Hub (signatures stored in ghcr.io)
+COSIGN_REPOSITORY=ghcr.io/jbsky/nginx-waf-hardened \
+  cosign verify \
+  --certificate-identity-regexp '^https://github.com/jbsky/nginx-hardened/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  docker.io/jbsky/nginx-waf-hardened:latest
+```
+
+
+### Hardening tier "Platine" guarantees
+
+| Property | Description |
+|----------|-------------|
+| FROM scratch | No base image, no shell, no package manager |
+| Go static init | Binary entrypoint + healthcheck (no script) |
+| tini PID 1 | Proper signal forwarding and zombie reaping |
+| Non-root | Runs as unprivileged UID |
+| Compiler hardening | RELRO, PIE, SSP, FORTIFY_SOURCE, stack-clash, NX |
+| Cosign signed | OIDC keyless signature via Sigstore transparency log |
+| SBOM | Software Bill of Materials embedded in manifest |
+| SLSA provenance | Build provenance attestation (level 2) |
