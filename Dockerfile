@@ -18,7 +18,7 @@
 # ---------------------------------------------------------------------------
 # Stage 0: fetcher — resout les dernieres versions stables
 # ---------------------------------------------------------------------------
-FROM alpine:3.23 AS fetcher
+FROM alpine:3.24 AS fetcher
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
@@ -50,7 +50,7 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------
 # Stage 1: builder — compile tout from source
 # ---------------------------------------------------------------------------
-FROM alpine:3.23 AS builder
+FROM alpine:3.24 AS builder
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
@@ -191,7 +191,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags='-s -w' -o /init .
 # ---------------------------------------------------------------------------
 # Stage 3: prep (assemble runtime filesystem)
 # ---------------------------------------------------------------------------
-FROM alpine:3.23 AS prep
+FROM alpine:3.24 AS prep
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
