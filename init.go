@@ -124,7 +124,13 @@ func healthcheck() int {
 			DialContext: (&net.Dialer{Timeout: 2 * time.Second}).DialContext,
 		},
 	}
-	resp, err := client.Get(healthURL)
+	req, err := http.NewRequest("GET", healthURL, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[healthcheck] request error: %v\n", err)
+		return 1
+	}
+	req.Host = "localhost"
+	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[healthcheck] GET %s failed: %v\n", healthURL, err)
 		return 1

@@ -22,6 +22,12 @@ FROM alpine:3.23 AS fetcher
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
+# Trust homelab CA if provided (for builds behind SSL-bumping proxy)
+RUN --mount=type=secret,id=ca-certs,target=/tmp/ca-bundle.crt,required=false \
+    if [ -f /tmp/ca-bundle.crt ]; then \
+      cat /tmp/ca-bundle.crt >> /etc/ssl/certs/ca-certificates.crt; \
+    fi
+
 RUN apk add --no-cache curl jq grep
 
 ARG NGINX_VER=""
@@ -222,11 +228,16 @@ COPY --chown=root:nginx conf/nginx/conf.d/ /etc/nginx/conf.d/
 COPY --chown=root:nginx conf/modsec/ /etc/nginx/modsec/
 
 # Harden: permissions + link libs
+# Expand CRS glob include (ModSecurity glob() fails in FROM scratch)
 RUN chmod 755 /usr/sbin/nginx \
  && chmod 644 /etc/nginx/nginx.conf /etc/nginx/conf.d/*.conf /etc/nginx/modsec/* \
  && chmod 755 /usr/lib/nginx/modules/*.so \
  && ln -sf /usr/lib/nginx/modules /etc/nginx/modules \
- && printf '/lib\n/usr/local/lib\n/usr/lib\n/usr/local/modsecurity/lib\n' > /etc/ld-musl-x86_64.path
+ && printf '/lib\n/usr/local/lib\n/usr/lib\n/usr/local/modsecurity/lib\n' > /etc/ld-musl-x86_64.path \
+ && for f in /usr/local/owasp-modsecurity-crs/rules/*.conf; do \
+      echo "Include \"$f\""; \
+    done > /etc/nginx/modsec/crs-rules.conf \
+ && sed -i 's|Include "/usr/local/owasp-modsecurity-crs/rules/\*\.conf"|Include "/etc/nginx/modsec/crs-rules.conf"|' /etc/nginx/modsec/main.conf
 
 # Strip APK/package-manager artifacts
 RUN rm -rf /lib/apk /lib/libapk* /var/cache/apk /etc/apk /sbin/apk
@@ -245,42 +256,42 @@ LABEL org.opencontainers.image.title="nginx-waf-hardened" \
       security.hardening.features="from-scratch,go-init,tini-pid1,zero-shell,non-root,compiler-hardening,cosign-signed,sbom,slsa-provenance"
 
 # User accounts
-COPY --link --from=prep /etc/passwd /etc/passwd
-COPY --link --from=prep /etc/group  /etc/group
+COPY --from=prep /etc/passwd /etc/passwd
+COPY --from=prep /etc/group  /etc/group
 
 # Dynamic linker (musl) + shared libraries
-COPY --link --from=prep /lib/ /lib/
-COPY --link --from=prep /usr/lib/ /usr/lib/
+COPY --from=prep /lib/ /lib/
+COPY --from=prep /usr/lib/ /usr/lib/
 
 # ModSecurity shared libraries
-COPY --link --from=prep /usr/local/modsecurity/lib/ /usr/local/modsecurity/lib/
+COPY --from=prep /usr/local/modsecurity/lib/ /usr/local/modsecurity/lib/
 
 # Nginx binary + modules
-COPY --link --from=prep /usr/sbin/nginx /usr/sbin/nginx
-COPY --link --from=prep /usr/lib/nginx/modules/ /usr/lib/nginx/modules/
-COPY --link --from=prep /etc/nginx/ /etc/nginx/
+COPY --from=prep /usr/sbin/nginx /usr/sbin/nginx
+COPY --from=prep /usr/lib/nginx/modules/ /usr/lib/nginx/modules/
+COPY --from=prep /etc/nginx/ /etc/nginx/
 
 # OWASP CRS rules
-COPY --link --from=prep /usr/local/owasp-modsecurity-crs/ /usr/local/owasp-modsecurity-crs/
+COPY --from=prep /usr/local/owasp-modsecurity-crs/ /usr/local/owasp-modsecurity-crs/
 
 # Custom error pages + html
-COPY --link --from=prep /usr/share/nginx/ /usr/share/nginx/
+COPY --from=prep /usr/share/nginx/ /usr/share/nginx/
 
 # Version info
-COPY --link --from=prep /etc/image-versions /etc/image-versions
+COPY --from=prep /etc/image-versions /etc/image-versions
 
 # Musl library path config
-COPY --link --from=prep /etc/ld-musl-x86_64.path /etc/ld-musl-x86_64.path
+COPY --from=prep /etc/ld-musl-x86_64.path /etc/ld-musl-x86_64.path
 
 # TLS trust store + timezone data
-COPY --link --from=prep /etc/ssl/ /etc/ssl/
-COPY --link --from=prep /usr/share/zoneinfo/ /usr/share/zoneinfo/
+COPY --from=prep /etc/ssl/ /etc/ssl/
+COPY --from=prep /usr/share/zoneinfo/ /usr/share/zoneinfo/
 
 # PID 1 — tini-static (no musl dependency for PID 1 reliability)
-COPY --link --from=prep /sbin/tini-static /sbin/tini
+COPY --from=prep /sbin/tini-static /sbin/tini
 
 # Go init binary (static, entrypoint + healthcheck + setup-dirs)
-COPY --link --from=gobuilder /init /usr/local/bin/init
+COPY --from=gobuilder /init /usr/local/bin/init
 
 # Create runtime directories with correct ownership (no shell needed)
 RUN ["/usr/local/bin/init", "--setup-dirs"]

@@ -7,13 +7,15 @@ set -euo pipefail
 HOST="${1:-127.0.0.1}"
 PORT="${2:-80}"
 BASE="http://${HOST}:${PORT}"
+CURL_OPTS=(-so /dev/null -w '%{http_code}' --max-time 5 -H "Host: localhost")
 PASS=0
 FAIL=0
 
 check() {
-  local desc="$1" url="$2" expected_code="$3"
+  local desc="$1" expected_code="$2"
+  shift 2
   local code
-  code=$(curl -so /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo "000")
+  code=$(curl "${CURL_OPTS[@]}" "$@" 2>/dev/null || echo "000")
   if [ "$code" = "$expected_code" ]; then
     echo "  [PASS] ${desc} → ${code}"
     PASS=$((PASS + 1))
@@ -28,27 +30,27 @@ echo "Target: ${BASE}"
 echo ""
 
 # Healthcheck
-check "Healthcheck /healthz" "${BASE}/healthz" "200"
+check "Healthcheck /healthz" "200" "${BASE}/healthz"
 
-# Normal page (should work or 404 if no content)
-check "Root /" "${BASE}/" "200"
+# Normal page (403 expected: no content mounted in /var/www/html)
+check "Root / (no content = 403)" "403" "${BASE}/"
 
 # Blocked files
-check "Block .env" "${BASE}/.env" "403"
-check "Block .git" "${BASE}/.git/config" "403"
-check "Block .sql" "${BASE}/dump.sql" "403"
+check "Block .env" "403" "${BASE}/.env"
+check "Block .git" "403" "${BASE}/.git/config"
+check "Block .sql" "403" "${BASE}/dump.sql"
 
 # Block bad methods
-check "TRACE blocked" "-X TRACE ${BASE}/" "405"
+check "TRACE blocked" "405" -X TRACE "${BASE}/"
 
 # ModSec: SQL injection attempt
-check "ModSec SQLi block" "${BASE}/?id=1%20OR%201=1--" "403"
+check "ModSec SQLi block" "403" "${BASE}/?id=1%20OR%201=1--"
 
 # ModSec: XSS attempt
-check "ModSec XSS block" "${BASE}/?q=<script>alert(1)</script>" "403"
+check "ModSec XSS block" "403" "${BASE}/?q=<script>alert(1)</script>"
 
 # WordPress scan blocked
-check "Block wp-login" "${BASE}/wp-login.php" "403"
+check "Block wp-login" "403" "${BASE}/wp-login.php"
 
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed ==="

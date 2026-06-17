@@ -46,7 +46,7 @@ services:
       - /var/run/nginx:size=1m,mode=0755,uid=1999,gid=1999
       - /var/cache/nginx:size=128m,mode=0755,uid=1999,gid=1999
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/healthz"]
+      test: ["CMD", "/usr/local/bin/init", "--healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 3
