@@ -1,0 +1,6 @@
+{
+  "nginx": "auto",
+  "modsecurity": "auto",
+  "owasp-crs": "auto",
+  "alpine": "3.23"
+}

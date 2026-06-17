@@ -203,6 +203,10 @@ build:
         TAG="${RESOLVED_NGINX}"
         EXTRA_TAGS="-t ${REGISTRY}/${IMAGE_NAMESPACE}/${IMAGE_NAME}:latest"
       fi
+    - |
+      if [ -n "$DOCKERHUB_TOKEN" ]; then
+        EXTRA_TAGS="${EXTRA_TAGS} -t docker.io/jbsky/${IMAGE_NAME}:${TAG} -t docker.io/jbsky/${IMAGE_NAME}:latest"
+      fi
     # Build with buildx (--load stores in local daemon, then push uses docker login creds)
     - |
       docker buildx build \
@@ -236,7 +240,7 @@ build:
       - image-digest.txt
     expire_in: 30 days
   tags:
-    - build
+    - docker
 
 # Build ARM64 (manual trigger)
 build:arm64:
