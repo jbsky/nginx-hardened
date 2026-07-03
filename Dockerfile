@@ -18,7 +18,7 @@
 # ---------------------------------------------------------------------------
 # Stage 0: fetcher — resout les dernieres versions stables
 # ---------------------------------------------------------------------------
-FROM alpine:3.23 AS fetcher
+FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS fetcher
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
@@ -56,7 +56,7 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------
 # Stage 1: builder — compile tout from source
 # ---------------------------------------------------------------------------
-FROM alpine:3.23 AS builder
+FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS builder
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
@@ -189,7 +189,7 @@ RUN . /etc/profile.d/ver.sh && \
 # ---------------------------------------------------------------------------
 # Stage 2: Go builder (entrypoint + healthcheck)
 # ---------------------------------------------------------------------------
-FROM golang:1.26-alpine AS gobuilder
+FROM golang:1.26-alpine@sha256:3ad57304ad93bbec8548a0437ad9e06a455660655d9af011d58b993f6f615648 AS gobuilder
 WORKDIR /build
 COPY go.mod init.go ./
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags='-s -w' -o /init .
@@ -197,7 +197,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags='-s -w' -o /init .
 # ---------------------------------------------------------------------------
 # Stage 3: prep (assemble runtime filesystem)
 # ---------------------------------------------------------------------------
-FROM alpine:3.23 AS prep
+FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS prep
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
