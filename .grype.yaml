@@ -1,0 +1,18 @@
+# Faux positifs Grype verifies aupres de la source faisant autorite (advisory
+# officiel nginx), pas des vulnerabilites reelles. Si `nginx` est bumpe vers
+# une autre version, ces regles cessent de matcher automatiquement -- Grype
+# re-evaluera la nouvelle version normalement, aucune maintenance manuelle
+# requise ici.
+ignore:
+  - vulnerability: CVE-2026-42055
+    package:
+      name: nginx
+      version: 1.30.3
+    # https://nginx.org/en/security_advisories.html
+    # "Not vulnerable: 1.31.2+, 1.30.3+" -- nginx declare 1.30.3 deja corrige.
+  - vulnerability: CVE-2026-48142
+    package:
+      name: nginx
+      version: 1.30.3
+    # https://nginx.org/en/security_advisories.html
+    # "Not vulnerable: 1.31.2+, 1.30.3+" -- nginx declare 1.30.3 deja corrige.
