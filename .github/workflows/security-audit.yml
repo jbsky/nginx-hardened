@@ -20,6 +20,7 @@ permissions:
   contents: read
   security-events: write
   packages: read
+  issues: write
 
 jobs:
   audit:
