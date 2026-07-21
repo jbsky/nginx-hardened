@@ -56,3 +56,40 @@ itself; `1.30.2` was then deleted by hand (`gh api --method DELETE
 run, cross-check the surviving semver tags against the CVE table above** -- if one
 inside the keep-window is still flagged, delete it explicitly. Don't assume the
 automated retention alone guarantees no vulnerable tag survives.
+
+**Two script bugs found rolling this out fleet-wide (2026-07-21), fixed same day**:
+this pattern was replicated across all `docker-hardened` repos, and the shared
+`scripts/prune-registry-tags.sh`/`prune-ghcr-tags.sh` had two latent bugs that didn't
+manifest here (nginx never exceeded 3 semver tags, and its `X.Y.Z` scheme dodged the
+regex bug) but caused real damage on `squid-hardened` and `php-fpm-hardened`:
+
+1. `sort -t. -k1,1n -k2,2n -k3,3n -r` does **not** reverse -- a trailing global `-r`
+   after explicit numeric `-k` keys is silently ignored on GNU coreutils 9.7, so the
+   "descending" sort was actually ascending. Consequence: the script deleted the
+   *newest* semver tags instead of the oldest wherever tag count exceeded keep-count.
+   On `php-fpm-hardened` this deleted `8.5.7` and `8.5.8` (the two current tags) while
+   keeping `8.4.21`/`8.4.22`/`8.5.3` (the ones meant to be pruned). Fixed by putting
+   `nr` directly on each `-k` (`-k1,1nr -k2,2nr -k3,3nr`) instead of a trailing `-r`.
+2. The semver regex required exactly three dot-separated components (`X.Y.Z`), so a
+   two-component scheme like `squid-hardened`'s `7.5`/`7.6` matched neither the
+   "keep" branch nor the exclusion for `latest` -- it fell into "always delete"
+   alongside `auto-*` snapshot tags, wiping out the *only* real version tags that
+   existed. Fixed by widening the regex to `^[0-9]+(\.[0-9]+){1,2}$`.
+
+A third, GHCR-specific gotcha compounded bug #2 on `squid-hardened`: GHCR groups
+multiple tags that share a digest into a single "version" object, and
+`prune-ghcr-tags.sh` classifies a version by its *first* tag only
+(`.metadata.container.tags[0]`). When the doomed `7.6` tag happened to be listed
+before `latest` on the same version object, deleting it deleted `latest` too --
+disproving the assumption that "skip if tag == latest" is enough protection on GHCR
+(it only protects a version whose first listed tag literally is `latest`).
+
+Both `7.6` (squid-hardened) and `8.5.8`/`latest` (php-fpm-hardened, Docker Hub side
+only -- GHCR stayed intact) were restored the same day via
+`docker buildx imagetools create --tag <dst> <intact-source>`, copying the manifest
+from whichever registry still had it rather than re-running a full build. `8.5.7` on
+`php-fpm-hardened` is a permanent (harmless) loss -- an old, already-superseded tag.
+**Lesson**: after writing a prune/delete script, dry-run the exact `sort`/regex logic
+against real sample data (`printf ... | sort ...`) before trusting it against a live
+registry -- a shellcheck pass and a clean YAML load say nothing about whether the
+*logic* does what you meant.
