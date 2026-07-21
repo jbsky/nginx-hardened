@@ -38,7 +38,14 @@ services:
         aliases: [nginx]
     volumes:
       - ./conf/nginx/conf.d:/etc/nginx/conf.d:ro
-      - ./conf/modsec:/etc/nginx/modsec:ro
+      # Only the actually-tunable ModSecurity files -- main.conf is baked at
+      # build time with its CRS glob include expanded into crs-rules.conf
+      # (ModSecurity's glob() doesn't work in FROM scratch, see Dockerfile).
+      # Bind-mounting the whole conf/modsec directory would shadow that
+      # expanded main.conf with the repo's raw pre-expansion source copy
+      # and break ModSecurity entirely.
+      - ./conf/modsec/modsecurity.conf:/etc/nginx/modsec/modsecurity.conf:ro
+      - ./conf/modsec/unicode.mapping:/etc/nginx/modsec/unicode.mapping:ro
       - html:/var/www/html
       - nginx_log:/var/log/nginx
     tmpfs:
