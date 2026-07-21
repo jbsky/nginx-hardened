@@ -11,7 +11,24 @@ OWNER="${1:?usage: prune-ghcr-tags.sh <owner> <package> [keep_count]}"
 PACKAGE="${2:?usage: prune-ghcr-tags.sh <owner> <package> [keep_count]}"
 KEEP_COUNT="${3:-3}"
 
-VERSIONS_JSON=$(gh api "/users/${OWNER}/packages/container/${PACKAGE}/versions" --paginate)
+# Packages that have accumulated many untagged versions (SBOM/provenance
+# attestations, cosign signatures, old manifest-list children -- never
+# pruned, since deleting them independently of their parent tag risks
+# breaking a still-live manifest reference) make this paginated listing
+# deep enough that GHCR intermittently 502s partway through. Confirmed on
+# c-icap-hardened (196 versions, 193 untagged): retrying the whole listing
+# a few times clears it, no different than a human re-running the workflow.
+for attempt in 1 2 3 4 5; do
+  if VERSIONS_JSON=$(gh api "/users/${OWNER}/packages/container/${PACKAGE}/versions" --paginate 2>&1); then
+    break
+  fi
+  if [ "$attempt" -eq 5 ]; then
+    echo "$VERSIONS_JSON" >&2
+    exit 1
+  fi
+  echo "Listing versions failed (attempt ${attempt}/5), retrying in $((attempt * 5))s..." >&2
+  sleep "$((attempt * 5))"
+done
 
 # id + first tag, newest first (API default order), tagged versions only.
 mapfile -t TAGGED < <(echo "$VERSIONS_JSON" \
