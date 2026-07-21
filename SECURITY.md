@@ -45,3 +45,14 @@ tags (already preserved via git tags/GitHub Releases, never meant for pinning). 
 ever deletes a package version by its own named tag -- untagged manifest-list children,
 attestations, and cosign signatures are left alone to avoid risking a still-live
 manifest reference. `1.30.1`/`1.30.2` removed from both registries the same day.
+
+**Important caveat, hit immediately on first run**: "keep the last 3 semver tags" is a
+*generic hygiene* policy, not a CVE-aware one -- it has no idea which of those 3 is
+still vulnerable. On GHCR, only 4 nginx versions had ever been tagged in total
+(1.30.1-1.30.4), so "last 3" still included `1.30.2` (vulnerable) and only dropped
+`1.30.1`. Caught by manually re-checking the post-run tag list, not by the script
+itself; `1.30.2` was then deleted by hand (`gh api --method DELETE
+/users/jbsky/packages/container/nginx-waf-hardened/versions/<id>`). **After any prune
+run, cross-check the surviving semver tags against the CVE table above** -- if one
+inside the keep-window is still flagged, delete it explicitly. Don't assume the
+automated retention alone guarantees no vulnerable tag survives.
