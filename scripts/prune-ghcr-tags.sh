@@ -27,7 +27,8 @@ for entry in "${TAGGED[@]}"; do
     continue
   fi
 
-  if [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  # Matches both X.Y (e.g. squid's 7.6) and X.Y.Z (e.g. nginx's 1.30.4).
+  if [[ "$tag" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
     SEMVER_SEEN=$((SEMVER_SEEN + 1))
     if [ "$SEMVER_SEEN" -gt "$KEEP_COUNT" ]; then
       DELETE_IDS+=("$id")

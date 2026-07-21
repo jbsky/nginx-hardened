@@ -23,9 +23,13 @@ TOKEN=$(curl -fsSL -X POST "https://hub.docker.com/v2/users/login/" \
 TAGS_JSON=$(curl -fsSL -H "Authorization: Bearer ${TOKEN}" \
   "https://hub.docker.com/v2/repositories/${DOCKERHUB_USERNAME}/${REPO}/tags?page_size=100")
 
+# Matches both X.Y (e.g. squid's 7.6) and X.Y.Z (e.g. nginx's 1.30.4) version
+# schemes. Sort descending via per-key "nr" -- a trailing global "-r" after
+# explicit "-k ...n" keys does NOT reverse them (verified: GNU coreutils 9.7
+# sorted ascending despite -r), a well-known GNU sort pitfall.
 mapfile -t SEMVER_TAGS < <(echo "$TAGS_JSON" | jq -r '.results[].name' \
-  | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-  | sort -t. -k1,1n -k2,2n -k3,3n -r)
+  | grep -E '^[0-9]+(\.[0-9]+){1,2}$' \
+  | sort -t. -k1,1nr -k2,2nr -k3,3nr)
 
 DELETE_SEMVER=("${SEMVER_TAGS[@]:${KEEP_COUNT}}")
 
@@ -33,7 +37,7 @@ DELETE_SEMVER=("${SEMVER_TAGS[@]:${KEEP_COUNT}}")
 # snapshots already preserved via git tags + GitHub Releases -- never meant
 # for pinning, always safe to prune.
 mapfile -t AUTO_TAGS < <(echo "$TAGS_JSON" | jq -r '.results[].name' \
-  | grep -vE '^[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '^latest$' || true)
+  | grep -vE '^[0-9]+(\.[0-9]+){1,2}$' | grep -v '^latest$' || true)
 
 DELETE_TAGS=("${DELETE_SEMVER[@]}" "${AUTO_TAGS[@]}")
 
