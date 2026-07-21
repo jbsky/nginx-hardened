@@ -16,3 +16,15 @@ ignore:
       version: 1.30.3
     # https://nginx.org/en/security_advisories.html
     # "Not vulnerable: 1.31.2+, 1.30.3+" -- nginx declare 1.30.3 deja corrige.
+  - vulnerability: CVE-2026-42055
+    package:
+      name: nginx
+      version: 1.30.4
+    # https://nginx.org/en/security_advisories.html
+    # "Not vulnerable: 1.31.2+, 1.30.3+" -- 1.30.4 est dans la plage corrigee.
+  - vulnerability: CVE-2026-48142
+    package:
+      name: nginx
+      version: 1.30.4
+    # https://nginx.org/en/security_advisories.html
+    # "Not vulnerable: 1.31.2+, 1.30.3+" -- 1.30.4 est dans la plage corrigee.
