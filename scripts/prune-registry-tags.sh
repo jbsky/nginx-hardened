@@ -48,8 +48,16 @@ fi
 
 for tag in "${DELETE_TAGS[@]}"; do
   echo "Deleting docker.io/${DOCKERHUB_USERNAME}/${REPO}:${tag}"
-  curl -fsSL -X DELETE -H "Authorization: Bearer ${TOKEN}" \
-    "https://hub.docker.com/v2/repositories/${DOCKERHUB_USERNAME}/${REPO}/tags/${tag}/"
+  # A concurrent run may have already deleted this exact tag -- a 404 means
+  # the goal state is already reached, not a real failure.
+  status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer ${TOKEN}" \
+    "https://hub.docker.com/v2/repositories/${DOCKERHUB_USERNAME}/${REPO}/tags/${tag}/")
+  if [ "$status" = "404" ]; then
+    echo "  (already deleted by a concurrent run, skipping)"
+  elif [ "${status:0:1}" != "2" ]; then
+    echo "  unexpected status ${status} deleting ${tag}" >&2
+    exit 1
+  fi
 done
 
 echo "Kept: ${SEMVER_TAGS[*]:0:${KEEP_COUNT}} latest"

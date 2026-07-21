@@ -47,5 +47,16 @@ fi
 
 for id in "${DELETE_IDS[@]}"; do
   echo "Deleting ghcr.io/${OWNER}/${PACKAGE} version id ${id}"
-  gh api --method DELETE "/users/${OWNER}/packages/container/${PACKAGE}/versions/${id}"
+  # A concurrent run (e.g. several dependabot PRs merged close together, each
+  # triggering its own build+cleanup) may have already deleted this exact
+  # version -- a 404 here means the goal state is already reached, not a
+  # real failure. Any other error still aborts the script.
+  if ! output=$(gh api --method DELETE "/users/${OWNER}/packages/container/${PACKAGE}/versions/${id}" 2>&1); then
+    if echo "$output" | grep -q '"status":"404"'; then
+      echo "  (already deleted by a concurrent run, skipping)"
+    else
+      echo "$output" >&2
+      exit 1
+    fi
+  fi
 done
