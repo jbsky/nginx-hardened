@@ -82,6 +82,7 @@ RUN apk add --no-cache \
 WORKDIR /opt
 
 # --- ModSecurity v3 ---
+# hadolint ignore=DL3003
 RUN . /etc/profile.d/ver.sh && \
     git clone -b "v${MODSEC_VER}" --depth 1 \
       https://github.com/owasp-modsecurity/ModSecurity.git && \
@@ -127,7 +128,7 @@ RUN . /etc/profile.d/ver.sh && \
     tar -xzC /usr/src -f /tmp/nginx.tar.gz && rm /tmp/nginx.tar.gz
 
 # Compile Nginx with hardening flags
-# hadolint ignore=SC2086
+# hadolint ignore=SC2086,DL3003
 RUN . /etc/profile.d/ver.sh && \
     cd "/usr/src/nginx-${NGINX_VER}" && \
     ./configure \
