@@ -245,6 +245,13 @@ jobs:
           category: version-watch
 
   # -------------------------------------------------------------------
+  cleanup:
+    name: Prune old registry tags
+    needs: rebuild
+    uses: ./.github/workflows/registry-cleanup.yml
+    secrets: inherit
+
+  # -------------------------------------------------------------------
   notify:
     name: Notify new image
     needs: [check, rebuild]

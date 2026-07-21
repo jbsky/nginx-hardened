@@ -1,0 +1,53 @@
+# =====================================================================
+#  Registry Cleanup — Prune old immutable version + auto-* tags
+#
+#  Every build-push/version-watch run pushes a brand new immutable
+#  version tag (e.g. 1.30.4) without ever retiring the previous one, on
+#  both Docker Hub and GHCR. Old tags accumulate forever and eventually
+#  point at genuinely vulnerable nginx builds still publicly pullable
+#  (found: 1.30.1/1.30.2 still live months after the CVE fix landed in
+#  1.30.3). This workflow prunes them, keeping only the last few semver
+#  tags plus :latest.
+#
+#  Callable from build-push.yml / version-watch.yml after a push, and
+#  directly dispatchable to clean up backlog on demand.
+# =====================================================================
+name: registry-cleanup
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: nginx-waf-hardened
+  KEEP_COUNT: 3
+
+permissions:
+  packages: write
+
+jobs:
+  prune:
+    name: Prune old registry tags
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check Docker Hub credentials
+        id: dockerhub
+        run: |
+          if [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prune old Docker Hub tags
+        if: steps.dockerhub.outputs.available == 'true'
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: ./scripts/prune-registry-tags.sh "${{ secrets.DOCKERHUB_USERNAME }}" "${{ env.IMAGE_NAME }}" "${{ env.KEEP_COUNT }}"
+
+      - name: Prune old GHCR tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/prune-ghcr-tags.sh "${{ github.repository_owner }}" "${{ env.IMAGE_NAME }}" "${{ env.KEEP_COUNT }}"
