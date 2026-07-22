@@ -50,15 +50,101 @@ jobs:
           scandir: ./scripts
 
   # -------------------------------------------------------------------
-  test:
-    name: Functional tests
+  #  Resolve upstream versions ONCE, shared by amd64 (test) and arm64
+  #  (build-arm64) builds -- otherwise two separate scrapes could race
+  #  against an upstream release and build genuinely mismatched arches.
+  # -------------------------------------------------------------------
+  resolve-versions:
+    name: Resolve upstream versions
     needs: lint
     runs-on: ubuntu-latest
+    outputs:
+      nginx: ${{ steps.versions.outputs.nginx }}
+      modsec: ${{ steps.versions.outputs.modsec }}
+      crs: ${{ steps.versions.outputs.crs }}
+    steps:
+      - id: versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          NGINX_VER=$(curl -fsSL https://nginx.org/en/download.html \
+            | grep -oP 'Stable version</h4>.*?Legacy' \
+            | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
+          MODSEC_VER=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
+            | jq -r '.tag_name' | sed 's/^v//')
+          CRS_VER=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
+            | jq -r '.tag_name' | sed 's/^v//')
+          echo "nginx=${NGINX_VER}" >> "$GITHUB_OUTPUT"
+          echo "modsec=${MODSEC_VER}" >> "$GITHUB_OUTPUT"
+          echo "crs=${CRS_VER}" >> "$GITHUB_OUTPUT"
+          echo "### Resolved versions" >> "$GITHUB_STEP_SUMMARY"
+          echo "- nginx: ${NGINX_VER}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- modsec: ${MODSEC_VER}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- crs: ${CRS_VER}" >> "$GITHUB_STEP_SUMMARY"
+
+  # -------------------------------------------------------------------
+  #  Builds amd64 once. On a real push/tag (never on pull_request -- fork
+  #  PRs must not get registry credentials) it's pushed BY DIGEST, pulled
+  #  back by that exact digest, and the functional tests run against
+  #  those literal bytes -- not a separately-built image that "should"
+  #  match thanks to cache. `promote` below merges that same digest with
+  #  build-arm64's into the final multi-arch manifest; amd64 never gets
+  #  rebuilt between "tested" and "shipped" (arm64 can't be functionally
+  #  tested here at all -- would need slow, less reliable QEMU-emulated
+  #  containers -- so it's still just built, not tested).
+  # -------------------------------------------------------------------
+  test:
+    name: Functional tests
+    needs: [lint, resolve-versions]
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    env:
+      PUBLISH: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v7
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login ghcr.io
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (load or push-by-digest)
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: ${{ env.PUBLISH != 'true' }}
+          outputs: ${{ env.PUBLISH == 'true' && format('type=image,name={0}/{1}/{2},push-by-digest=true,name-canonical=true,push=true', env.REGISTRY, env.NAMESPACE, env.IMAGE_NAME) || '' }}
+          tags: ${{ env.PUBLISH != 'true' && format('{0}:latest', env.IMAGE_NAME) || '' }}
+          sbom: ${{ env.PUBLISH }}
+          provenance: ${{ env.PUBLISH == 'true' && 'mode=max' || 'false' }}
+          build-args: |
+            NGINX_VER=${{ needs.resolve-versions.outputs.nginx }}
+            MODSEC_VER=${{ needs.resolve-versions.outputs.modsec }}
+            OWASP_CRS_VER=${{ needs.resolve-versions.outputs.crs }}
+          cache-from: type=gha,scope=nginx-waf-linux/amd64
+          cache-to: type=gha,mode=max,scope=nginx-waf-linux/amd64
+
+      - name: Pull back pushed digest for testing
+        if: env.PUBLISH == 'true'
+        run: |
+          set -euo pipefail
+          docker pull "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+          docker tag  "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}" "${{ env.IMAGE_NAME }}:latest"
+
       - name: Build & start stack
-        run: docker compose up -d --build nginx
+        run: docker compose up -d --no-build nginx
 
       - name: Wait for healthy
         run: |
@@ -84,26 +170,67 @@ jobs:
         run: docker compose down -v
 
   # -------------------------------------------------------------------
-  build:
-    name: Build & Push
-    needs: [lint, test]
+  #  arm64 companion build -- cross-compiled via QEMU, can't be
+  #  functionally tested here, pushed by digest for promote to merge.
+  # -------------------------------------------------------------------
+  build-arm64:
+    name: Build arm64
+    needs: [lint, resolve-versions, test]
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
     outputs:
       digest: ${{ steps.build.outputs.digest }}
-
     steps:
       - uses: actions/checkout@v7
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
         with:
-          platforms: arm64,amd64
+          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+
+      - name: Login ghcr.io
+        uses: docker/login-action@v4
         with:
-          driver-opts: image=moby/buildkit:latest
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          sbom: true
+          provenance: mode=max
+          build-args: |
+            NGINX_VER=${{ needs.resolve-versions.outputs.nginx }}
+            MODSEC_VER=${{ needs.resolve-versions.outputs.modsec }}
+            OWASP_CRS_VER=${{ needs.resolve-versions.outputs.crs }}
+          outputs: type=image,"name=${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}",push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=nginx-waf-linux/arm64
+          cache-to: type=gha,mode=max,scope=nginx-waf-linux/arm64
+
+  # -------------------------------------------------------------------
+  #  Merges test's tested amd64 digest with build-arm64's digest into the
+  #  final multi-arch manifest -- no rebuild of either.
+  # -------------------------------------------------------------------
+  build:
+    name: Promote tested digests
+    needs: [test, build-arm64, resolve-versions]
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    outputs:
+      digest: ${{ steps.manifest.outputs.digest }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
       - name: Login ghcr.io
         uses: docker/login-action@v4
@@ -128,29 +255,6 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Resolve upstream versions
-        id: versions
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          NGINX_VER=$(curl -fsSL https://nginx.org/en/download.html \
-            | grep -oP 'Stable version</h4>.*?Legacy' \
-            | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
-          MODSEC_VER=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
-            https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
-            | jq -r '.tag_name' | sed 's/^v//')
-          CRS_VER=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
-            https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
-            | jq -r '.tag_name' | sed 's/^v//')
-          echo "nginx=${NGINX_VER}" >> "$GITHUB_OUTPUT"
-          echo "modsec=${MODSEC_VER}" >> "$GITHUB_OUTPUT"
-          echo "crs=${CRS_VER}" >> "$GITHUB_OUTPUT"
-          echo "### Resolved versions" >> "$GITHUB_STEP_SUMMARY"
-          echo "- nginx: ${NGINX_VER}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- modsec: ${MODSEC_VER}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- crs: ${CRS_VER}" >> "$GITHUB_STEP_SUMMARY"
-
       - name: Compute Docker Hub image name
         id: dockerhub-image
         if: steps.dockerhub.outputs.available == 'true'
@@ -167,36 +271,30 @@ jobs:
             ${{ steps.dockerhub-image.outputs.image }}
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=${{ steps.versions.outputs.nginx }}
+            type=raw,value=${{ needs.resolve-versions.outputs.nginx }}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build & Push
-        id: build
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          sbom: true
-          provenance: mode=max
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: |
-            ${{ steps.meta.outputs.labels }}
-            org.opencontainers.image.version=${{ steps.versions.outputs.nginx }}
-            versions=nginx=${{ steps.versions.outputs.nginx }} modsec=${{ steps.versions.outputs.modsec }} crs=${{ steps.versions.outputs.crs }}
-          build-args: |
-            NGINX_VER=${{ steps.versions.outputs.nginx }}
-            MODSEC_VER=${{ steps.versions.outputs.modsec }}
-            OWASP_CRS_VER=${{ steps.versions.outputs.crs }}
-          cache-from: type=gha,scope=nginx-waf
-          cache-to: type=gha,mode=max,scope=nginx-waf
+      - name: Create manifest from tested digests (no rebuild)
+        id: manifest
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}"
+          TAGS=""
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && TAGS="${TAGS} -t ${tag}"
+          done <<< "${{ steps.meta.outputs.tags }}"
+          docker buildx imagetools create ${TAGS} \
+            "${IMAGE}@${{ needs.test.outputs.digest }}" \
+            "${IMAGE}@${{ needs.build-arm64.outputs.digest }}"
+          DIGEST=$(docker buildx imagetools inspect "${IMAGE}:${{ needs.resolve-versions.outputs.nginx }}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
       - name: Sign image (OIDC keyless)
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.manifest.outputs.digest }}
           HAS_DOCKERHUB: ${{ steps.dockerhub.outputs.available }}
           DOCKERHUB_NS: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
@@ -209,7 +307,7 @@ jobs:
       - name: Trivy scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          image-ref: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ steps.manifest.outputs.digest }}
           format: sarif
           output: trivy-nginx.sarif
           severity: CRITICAL,HIGH
@@ -228,7 +326,7 @@ jobs:
         uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
 
       - name: Summary
@@ -237,13 +335,13 @@ jobs:
           DOCKERHUB_NS: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           echo "### nginx-waf-hardened" >> $GITHUB_STEP_SUMMARY
-          echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** \`${{ steps.manifest.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
           if [ "$HAS_DOCKERHUB" = "true" ]; then
             echo "docker pull docker.io/${DOCKERHUB_NS}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "cosign verify ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }} \\" >> $GITHUB_STEP_SUMMARY
+          echo "cosign verify ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ steps.manifest.outputs.digest }} \\" >> $GITHUB_STEP_SUMMARY
           echo "  --certificate-identity-regexp '^https://github.com/${{ github.repository }}/' \\" >> $GITHUB_STEP_SUMMARY
           echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
