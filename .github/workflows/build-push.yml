@@ -220,10 +220,14 @@ jobs:
   # -------------------------------------------------------------------
   #  arm64 companion build -- cross-compiled via QEMU, can't be
   #  functionally tested here, pushed by digest for promote to merge.
+  #  Independent of build/test (different platform, no shared artifact),
+  #  so it runs in parallel with them rather than waiting on the amd64
+  #  test to pass -- `promote` below still needs both `test` and this job
+  #  to succeed, so a failed amd64 test still blocks shipping either way.
   # -------------------------------------------------------------------
   build-arm64:
     name: Build arm64
-    needs: [lint, resolve-versions, test]
+    needs: [lint, resolve-versions]
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
     outputs:
