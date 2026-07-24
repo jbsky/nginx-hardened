@@ -260,17 +260,17 @@ jobs:
     permissions:
       contents: write
       issues: write
-      workflows: write
     steps:
       - uses: actions/checkout@v7
 
-      - name: Create git tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ needs.rebuild.outputs.tag }}" -m "Auto-rebuild: nginx=${{ needs.check.outputs.nginx_ver }} modsec=${{ needs.check.outputs.modsec_ver }} crs=${{ needs.check.outputs.crs_ver }}"
-          git push origin "${{ needs.rebuild.outputs.tag }}"
-
+      # Creating the tag via `git push` goes through git's pre-receive hook,
+      # which refuses any GITHUB_TOKEN-authored push whose ref is brand new
+      # and whose tree contains .github/workflows/* (even unchanged content
+      # already on main) unless the token has `workflows` permission — a
+      # permission GITHUB_TOKEN can never be granted. action-gh-release
+      # creates the tag itself via the Releases REST API instead, a
+      # separate code path that only needs `contents: write` as long as the
+      # tag targets the current branch tip (not an older commit).
       - name: Create GitHub Release (notification trigger)
         uses: softprops/action-gh-release@v3
         with:
