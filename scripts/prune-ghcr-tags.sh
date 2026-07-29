@@ -30,29 +30,58 @@ for attempt in 1 2 3 4 5; do
   sleep "$((attempt * 5))"
 done
 
-# id + first tag, newest first (API default order), tagged versions only.
+# GHCR groups every tag pointing at the same digest into ONE version object.
+# A single build push (latest + <version> + auto-YYYYMMDD.N, all one digest)
+# lands as one version carrying all three tags; a cosign signature or SLSA
+# attestation lands as its own version carrying just its own "sha256-..."
+# tag. Any classification that looks at only one tag per version (e.g.
+# tags[0]) can misclassify the whole version -- confirmed live: nginx-waf-
+# hardened's GHCR "latest" was wiped entirely because the version's first
+# listed tag happened to be that run's auto-* tag, and every repo's cosign
+# signature was deleted every single build because "sha256-...sig"/".att"
+# tags matched no protected pattern. Fix: inspect the FULL tag set of a
+# version and protect it if ANY tag on it deserves protection.
+mapfile -t ALL_SEMVER < <(echo "$VERSIONS_JSON" \
+  | jq -r '.[].metadata.container.tags[]?' \
+  | grep -E '^[0-9]+(\.[0-9]+){1,2}$' \
+  | sort -t. -k1,1nr -k2,2nr -k3,3nr)
+
+declare -A KEEP_SEMVER=()
+for tag in "${ALL_SEMVER[@]:0:${KEEP_COUNT}}"; do
+  KEEP_SEMVER["$tag"]=1
+done
+
 mapfile -t TAGGED < <(echo "$VERSIONS_JSON" \
-  | jq -r '.[] | select(.metadata.container.tags | length > 0) | "\(.id)\t\(.metadata.container.tags[0])"')
+  | jq -r '.[] | select(.metadata.container.tags | length > 0) | "\(.id)\t" + (.metadata.container.tags | join(","))')
 
 DELETE_IDS=()
-SEMVER_SEEN=0
 for entry in "${TAGGED[@]}"; do
   id="${entry%%$'\t'*}"
-  tag="${entry##*$'\t'}"
+  tags_csv="${entry#*$'\t'}"
+  IFS=',' read -ra tags <<< "$tags_csv"
 
-  if [ "$tag" = "latest" ]; then
-    continue
-  fi
-
-  # Matches both X.Y (e.g. squid's 7.6) and X.Y.Z (e.g. nginx's 1.30.4).
-  if [[ "$tag" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
-    SEMVER_SEEN=$((SEMVER_SEEN + 1))
-    if [ "$SEMVER_SEEN" -gt "$KEEP_COUNT" ]; then
-      DELETE_IDS+=("$id")
+  protect=false
+  for tag in "${tags[@]}"; do
+    if [ "$tag" = "latest" ]; then
+      protect=true
+      break
     fi
-  else
-    # auto-* snapshots and legacy short-sha tags: already preserved via git
-    # tags/GitHub Releases, never meant for pinning, always safe to prune.
+    # Cosign signatures/attestations/SBOMs, tagged "sha256-<digest>.<suffix>"
+    # -- a digest-derived reference, never meant to be human-pinned, and
+    # load-bearing for whatever manifest it signs. Match on prefix alone
+    # rather than an enumerated suffix list (.sig/.att/.sbom today, but the
+    # convention isn't a contract).
+    if [[ "$tag" == sha256-* ]]; then
+      protect=true
+      break
+    fi
+    if [ -n "${KEEP_SEMVER[$tag]+x}" ]; then
+      protect=true
+      break
+    fi
+  done
+
+  if [ "$protect" = false ]; then
     DELETE_IDS+=("$id")
   fi
 done

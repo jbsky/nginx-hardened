@@ -85,6 +85,6 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: `[Security] Weekly audit failed - ${today}`,
-              body: `Audit du ${today} a detecte des CVE. Voir Security tab.\n\n${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/security/code-scanning`,
+              body: `Audit du ${today} a detecte des CVE ou un echec de verification. Voir le run.\n\n${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
               labels: ['security','automated']
             });
