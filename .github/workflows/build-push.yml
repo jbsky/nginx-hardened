@@ -158,7 +158,9 @@ jobs:
   # -------------------------------------------------------------------
   test:
     name: Functional tests
-    needs: build
+    # resolve-versions too: nginx has no version in git, so the only thing
+    # the tag can be checked against is the version this run resolved.
+    needs: [build, resolve-versions]
     runs-on: ubuntu-latest
     env:
       PUBLISH: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
@@ -205,6 +207,22 @@ jobs:
           echo "::error::nginx-waf did not become healthy in time"
           docker compose logs
           exit 1
+
+      # A version tag that does not match the binary inside is the one
+      # failure nothing else here catches: php shipped 8.5.8 under an 8.5.9
+      # tag for 18 days because only the FROM tag was rewritten, never the
+      # digest. Ask the built image what it is, and refuse to publish if it
+      # disagrees with what we are about to call it.
+      - name: Assert the image is the nginx version we tag it with
+        run: |
+          set -euo pipefail
+          want="${{ needs.resolve-versions.outputs.nginx }}"
+          got=$(docker exec nginx-waf nginx -v 2>&1 | grep -oP 'nginx/\K[0-9][0-9.]*')
+          echo "declared: ${want} | image: ${got}"
+          if [ "$want" != "$got" ]; then
+            echo "::error::image ships nginx ${got} but would be published as ${want}"
+            exit 1
+          fi
 
       - name: Run smoke tests
         run: ./scripts/test.sh 127.0.0.1 80
