@@ -217,10 +217,15 @@ jobs:
         run: |
           set -euo pipefail
           want="${{ needs.resolve-versions.outputs.nginx }}"
-          got=$(docker exec nginx-waf nginx -v 2>&1 | grep -oP 'nginx/\K[0-9][0-9.]*')
-          echo "declared: ${want} | image: ${got}"
+          # Capture the probe before extracting: a dead container or a
+          # changed banner would otherwise fail the pipeline under
+          # `set -e` before a single diagnostic line is printed.
+          raw=$(docker exec nginx-waf nginx -v 2>&1 || true)
+          got=$(printf '%s' "$raw" | grep -oP 'nginx/\K[0-9][0-9.]*' || true)
+          echo "declared: ${want} | image: ${got:-<no version parsed>}"
           if [ "$want" != "$got" ]; then
-            echo "::error::image ships nginx ${got} but would be published as ${want}"
+            echo "::error::image ships nginx ${got:-<unknown>} but would be published as ${want}"
+            printf 'probe output:\n%s\n' "$raw" | head -5
             exit 1
           fi
 
