@@ -46,12 +46,20 @@ jobs:
           sarif_file: trivy-nginx.sarif
           category: audit-nginx
 
+      # Trivy is a gate, not just a printout. On 2026-08-18 grype reported
+      # "No vulnerabilities found" on squid/c-icap/clamav/bind9 :latest while
+      # trivy listed 8 High Go stdlib CVEs in the very same init binary -- the
+      # audits stayed green for weeks while shipping them. Two scanners are
+      # only worth running if both can fail the job; `ignore-unfixed` keeps
+      # the semantics aligned with grype's `--only-fixed`.
       - name: Trivy summary
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
           format: table
           severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
 
       - name: Install Grype
         run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
