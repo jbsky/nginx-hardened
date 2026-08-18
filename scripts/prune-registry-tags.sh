@@ -23,21 +23,42 @@ TOKEN=$(curl -fsSL -X POST "https://hub.docker.com/v2/users/login/" \
 TAGS_JSON=$(curl -fsSL -H "Authorization: Bearer ${TOKEN}" \
   "https://hub.docker.com/v2/repositories/${DOCKERHUB_USERNAME}/${REPO}/tags?page_size=100")
 
-# Matches both X.Y (e.g. squid's 7.6) and X.Y.Z (e.g. nginx's 1.30.4) version
-# schemes. Sort descending via per-key "nr" -- a trailing global "-r" after
+# Matches X.Y (squid's 7.6), X.Y.Z (nginx's 1.30.4) and the revisioned forms
+# that carry a build counter as their last component (7.6.13, 1.30.4.2).
+# Anything NOT matched here is deleted unconditionally further down, so this
+# range has to grow whenever the tag scheme does -- a 4-component tag under
+# the old {1,2} would have been wiped on its first prune run.
+# Sort descending via per-key "nr" -- a trailing global "-r" after
 # explicit "-k ...n" keys does NOT reverse them (verified: GNU coreutils 9.7
 # sorted ascending despite -r), a well-known GNU sort pitfall.
 mapfile -t SEMVER_TAGS < <(echo "$TAGS_JSON" | jq -r '.results[].name' \
-  | grep -E '^[0-9]+(\.[0-9]+){1,2}$' \
-  | sort -t. -k1,1nr -k2,2nr -k3,3nr)
+  | grep -E '^[0-9]+(\.[0-9]+){1,3}$' \
+  | sort -t. -k1,1nr -k2,2nr -k3,3nr -k4,4nr)
 
-DELETE_SEMVER=("${SEMVER_TAGS[@]:${KEEP_COUNT}}")
+KEEP_TAGS=("${SEMVER_TAGS[@]:0:${KEEP_COUNT}}")
+
+# A revisioned tag (7.6.13) and the short tag that floats to it (7.6) name the
+# same build, but the short one sorts below every revision of itself -- so a
+# plain "newest KEEP_COUNT" deletes exactly the tag deployments pin. Keep any
+# tag that is a dot-prefix of one already being kept.
+DELETE_SEMVER=()
+for tag in "${SEMVER_TAGS[@]:${KEEP_COUNT}}"; do
+  protected=false
+  for kept in "${KEEP_TAGS[@]}"; do
+    case "$kept" in "${tag}."*) protected=true; break ;; esac
+  done
+  if [ "$protected" = true ]; then
+    KEEP_TAGS+=("$tag")
+  else
+    DELETE_SEMVER+=("$tag")
+  fi
+done
 
 # auto-* (and any other non-semver, non-latest) tags are point-in-time
 # snapshots already preserved via git tags + GitHub Releases -- never meant
 # for pinning, always safe to prune.
 mapfile -t AUTO_TAGS < <(echo "$TAGS_JSON" | jq -r '.results[].name' \
-  | grep -vE '^[0-9]+(\.[0-9]+){1,2}$' | grep -v '^latest$' || true)
+  | grep -vE '^[0-9]+(\.[0-9]+){1,3}$' | grep -v '^latest$' || true)
 
 DELETE_TAGS=("${DELETE_SEMVER[@]}" "${AUTO_TAGS[@]}")
 
@@ -60,4 +81,4 @@ for tag in "${DELETE_TAGS[@]}"; do
   fi
 done
 
-echo "Kept: ${SEMVER_TAGS[*]:0:${KEEP_COUNT}} latest"
+echo "Kept: ${KEEP_TAGS[*]} latest"
