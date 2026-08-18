@@ -20,7 +20,12 @@ on:
 
 env:
   IMAGE_NAME: nginx-waf-hardened
-  KEEP_COUNT: 3
+  # Counts TAGS, not upstream versions: since every build now pushes its own
+  # revisioned tag, 3 would have meant "the last 3 builds" and would have
+  # retired the previous upstream version almost immediately. 6 keeps a few
+  # revisions of the current version plus room for the one before it.
+  # The short version tags are protected separately by the prune scripts.
+  KEEP_COUNT: 6
 
 permissions:
   packages: write

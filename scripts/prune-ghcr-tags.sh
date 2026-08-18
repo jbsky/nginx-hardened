@@ -41,14 +41,25 @@ done
 # signature was deleted every single build because "sha256-...sig"/".att"
 # tags matched no protected pattern. Fix: inspect the FULL tag set of a
 # version and protect it if ANY tag on it deserves protection.
+# {1,3} also matches the revisioned tags (7.6.13, 1.30.4.2); anything not
+# matched here is treated as a disposable snapshot and deleted.
 mapfile -t ALL_SEMVER < <(echo "$VERSIONS_JSON" \
   | jq -r '.[].metadata.container.tags[]?' \
-  | grep -E '^[0-9]+(\.[0-9]+){1,2}$' \
-  | sort -t. -k1,1nr -k2,2nr -k3,3nr)
+  | grep -E '^[0-9]+(\.[0-9]+){1,3}$' \
+  | sort -t. -k1,1nr -k2,2nr -k3,3nr -k4,4nr)
 
 declare -A KEEP_SEMVER=()
 for tag in "${ALL_SEMVER[@]:0:${KEEP_COUNT}}"; do
   KEEP_SEMVER["$tag"]=1
+done
+
+# The short tag (7.6) floats to the newest revision (7.6.13) but sorts below
+# every one of them, so keeping only the newest KEEP_COUNT would delete the
+# tag deployments actually pin. Keep any tag that is a dot-prefix of a kept one.
+for tag in "${ALL_SEMVER[@]:${KEEP_COUNT}}"; do
+  for kept in "${!KEEP_SEMVER[@]}"; do
+    case "$kept" in "${tag}."*) KEEP_SEMVER["$tag"]=1; break ;; esac
+  done
 done
 
 mapfile -t TAGGED < <(echo "$VERSIONS_JSON" \
