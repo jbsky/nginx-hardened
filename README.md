@@ -48,7 +48,7 @@ inaccessible. **En production, epinglez le tag qui porte le compteur.**
 <!-- END:tags -->
 
 Le compteur compte les commits qui touchent les inputs de l'image (`Dockerfile`,
-`conf/`, `errors/`). Un commit qui ne touche que la CI ne l'incremente pas.
+`conf/`, `errors/`). Un commit qui ne touche que `.github/` ne l'incremente pas.
 
 Contrairement aux autres images de la flotte, il **ne repart pas a zero** a
 chaque nouvelle version de Nginx : les versions Nginx, ModSecurity et CRS sont
