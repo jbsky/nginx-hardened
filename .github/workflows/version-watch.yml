@@ -122,7 +122,11 @@ jobs:
       digest: ${{ steps.build.outputs.digest }}
       tag: ${{ steps.tag.outputs.tag }}
     steps:
+      # fetch-depth 0: build-revision.sh counts commits, a shallow clone
+      # would silently make every image .0
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Compute auto-release tag
         id: tag
@@ -170,21 +174,34 @@ jobs:
           DOCKERHUB_NS: ${{ secrets.DOCKERHUB_USERNAME }}
         run: echo "image=docker.io/${DOCKERHUB_NS}/${{ env.IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
 
+      - name: Compute build revision
+        id: revision
+        env:
+          NGINX_VER: ${{ needs.check.outputs.nginx_ver }}
+        run: |
+          set -euo pipefail
+          REVISION=$(./scripts/build-revision.sh --unanchored -- Dockerfile conf/ errors/)
+          echo "tag=${NGINX_VER}.${REVISION}" >> "$GITHUB_OUTPUT"
+          echo "- Build revision: ${NGINX_VER}.${REVISION}" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Compute tags
         id: tags
         env:
           DOCKERHUB_IMAGE: ${{ steps.dockerhub-image.outputs.image }}
           NGINX_VER: ${{ needs.check.outputs.nginx_ver }}
           AUTO_TAG: ${{ steps.tag.outputs.tag }}
+          REVISION_TAG: ${{ steps.revision.outputs.tag }}
         run: |
           TAGS="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
           ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${NGINX_VER}
-          ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${AUTO_TAG}"
+          ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${AUTO_TAG}
+          ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${REVISION_TAG}"
           if [ -n "$DOCKERHUB_IMAGE" ]; then
             TAGS="${TAGS}
           ${DOCKERHUB_IMAGE}:latest
           ${DOCKERHUB_IMAGE}:${NGINX_VER}
-          ${DOCKERHUB_IMAGE}:${AUTO_TAG}"
+          ${DOCKERHUB_IMAGE}:${AUTO_TAG}
+          ${DOCKERHUB_IMAGE}:${REVISION_TAG}"
           fi
           {
             echo "tags<<EOF"
