@@ -436,6 +436,54 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
   # -------------------------------------------------------------------
+  # -------------------------------------------------------------------
+  #  Le README nomme le tag immuable courant. On le regenere ici pour que la
+  #  doc ne puisse jamais designer un tag que les registres ne portent plus.
+  # -------------------------------------------------------------------
+  update-readme:
+    name: Refresh README tag block
+    needs: [promote, resolve-versions]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # fetch-depth 0: build-revision.sh counts commits, a shallow clone
+      # would silently make every image .0
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Rewrite tag block
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.resolve-versions.outputs.nginx }}"
+          REVISION=$(./scripts/build-revision.sh --unanchored -- Dockerfile conf/ errors/)
+          ./scripts/update-readme-tags.sh "jbsky/nginx-waf-hardened=${VERSION}=${VERSION}.${REVISION}"
+
+      - name: Commit if changed
+        run: |
+          set -euo pipefail
+          # `git diff --quiet && exit 0` would abort the step under `set -e`
+          # on the branch where there IS a change: use an explicit if.
+          if git diff --quiet README.md; then
+            echo "README already names the current tag"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs(readme): tag immuable courant [skip ci]"
+          # A concurrent publish may have landed first: rebase and retry
+          # rather than fail the run over a race.
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            git pull --rebase origin main || true
+          done
+          exit 1
+
   cleanup:
     name: Prune old registry tags
     needs: promote

@@ -33,6 +33,31 @@ Image Docker Nginx compilee from source, hardenee (FROM scratch, Go init, tini P
 | Bot blocking | User-agents vides, methodes non-standard |
 | Security headers | CSP, HSTS, X-Frame-Options, Referrer-Policy, Permissions-Policy |
 
+## Tags
+
+Trois tags par image : `latest` (dernier build de `main`), la version amont
+seule, et la version amont suffixee d'un **compteur de revision**. Les deux
+premiers sont **reecrits en place** a chaque rebuild -- bump Alpine, correctif
+CVE, changement de config -- et le build qu'ils designaient devient alors
+inaccessible. **En production, epinglez le tag qui porte le compteur.**
+
+<!-- BEGIN:tags (genere par la CI -- ne pas editer a la main) -->
+| Image | Version amont | Tag immuable a epingler |
+|-------|---------------|-------------------------|
+| `jbsky/nginx-waf-hardened` | `1.30.4` | `1.30.4.9` |
+<!-- END:tags -->
+
+Le compteur compte les commits qui touchent les inputs de l'image (`Dockerfile`,
+`conf/`, `errors/`). Un commit qui ne touche que la CI ne l'incremente pas.
+
+Contrairement aux autres images de la flotte, il **ne repart pas a zero** a
+chaque nouvelle version de Nginx : les versions Nginx, ModSecurity et CRS sont
+resolues au build (voir Auto-versioning ci-dessous) et ne sont donc inscrites
+nulle part dans git pour servir d'ancre.
+
+Les deux registres, `docker.io` et `ghcr.io`, publient les memes tags avec le
+meme digest.
+
 ## Auto-versioning
 
 Les versions Nginx, ModSecurity et OWASP CRS sont resolues automatiquement au build time.
@@ -40,7 +65,7 @@ Pour forcer une version :
 
 ```bash
 docker build \
-  --build-arg NGINX_VER=1.30.2 \
+  --build-arg NGINX_VER=1.30.4 \
   --build-arg MODSEC_VER=3.0.14 \
   --build-arg OWASP_CRS_VER=4.13.0 \
   .
