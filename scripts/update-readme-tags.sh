@@ -54,4 +54,14 @@ awk -v b="$BEGIN" -v e="$END" -v blk="$block" '
 ' "$README" > "$out"
 
 mv "$out" "$README"
+
+# Every reference to a managed image anywhere in the page carries the immutable
+# tag too. Without this the block stays correct while the docker run / cosign /
+# VyOS examples below it silently rot to whatever was current when they were
+# typed -- which is how the page ended up showing three different versions.
+for spec in "$@"; do
+  IFS='=' read -r img _ rev <<<"$spec"
+  sed -i -E "s#${img}:[0-9][0-9.]*#${img}:${rev}#g" "$README"
+done
+
 echo "README tag block updated: $*"
