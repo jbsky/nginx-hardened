@@ -65,9 +65,9 @@ Pour forcer une version :
 
 ```bash
 docker build \
-  --build-arg NGINX_VER=1.30.4 \
-  --build-arg MODSEC_VER=3.0.14 \
-  --build-arg OWASP_CRS_VER=4.13.0 \
+  --build-arg NGINX_VER=<version> \
+  --build-arg MODSEC_VER=<version> \
+  --build-arg OWASP_CRS_VER=<version> \
   .
 ```
 
