@@ -242,6 +242,38 @@ RUN chmod 755 /usr/sbin/nginx \
  && sed -i 's|Include "/usr/local/owasp-modsecurity-crs/rules/\*\.conf"|Include "/etc/nginx/modsec/crs-rules.conf"|' /etc/nginx/modsec/main.conf
 
 # Strip APK/package-manager artifacts
+# Collect exactly the shared objects that ship. Copying /lib and /usr/lib whole
+# defeats the apk cleanup just below: it carried libapk.so along with it.
+# lddtree lists each binary, its transitive dependencies, symlinks with their
+# targets, and the loader for the architecture being built. It runs before apk
+# is removed, since it needs apk to install itself.
+#
+# The nginx dynamic modules are dlopen'd, so they are closure roots, enumerated
+# with find rather than a glob: busybox sh hands an unmatched glob through
+# literally. The build stops if that enumeration is empty.
+RUN --mount=type=cache,target=/var/cache/apk \
+    apk add --no-cache lddtree \
+ && mkdir -p /rootfs \
+ && test -n "$(find /usr/lib/nginx/modules -name '*.so' -print -quit)" \
+ && { lddtree -l /usr/sbin/nginx; \
+      find /usr/lib/nginx/modules -name '*.so' -exec lddtree -l {} +; } > /tmp/closure.list \
+ && sort -u /tmp/closure.list -o /tmp/closure.list \
+ && tar -cf /tmp/closure.tar -T /tmp/closure.list \
+ && tar -xf /tmp/closure.tar -C /rootfs \
+ && rm -f /tmp/closure.list /tmp/closure.tar
+
+# libmodsecurity lives outside /usr/lib and is resolved through
+# /etc/ld-musl-*.path, which lddtree does not read -- copied by hand, and only
+# the shared objects: libmodsecurity.a is 103 MB of static archive that nothing
+# loads at runtime, and it was being shipped by the wholesale directory copy.
+# OpenSSL providers are dlopen'd, so no closure sees them; the 1.x engines are
+# deprecated and unused.
+RUN mkdir -p /rootfs/usr/local/modsecurity/lib /rootfs/usr/lib \
+ && test -n "$(find /usr/local/modsecurity/lib -name 'libmodsecurity.so*' -print -quit)" \
+ && find /usr/local/modsecurity/lib -name 'libmodsecurity.so*' \
+      -exec cp -a {} /rootfs/usr/local/modsecurity/lib/ \; \
+ && cp -a /usr/lib/ossl-modules /rootfs/usr/lib/
+
 RUN rm -rf /lib/apk /lib/libapk* /var/cache/apk /etc/apk /sbin/apk
 
 # ---------------------------------------------------------------------------
@@ -262,11 +294,9 @@ COPY --from=prep /etc/passwd /etc/passwd
 COPY --from=prep /etc/group  /etc/group
 
 # Dynamic linker (musl) + shared libraries
-COPY --from=prep /lib/ /lib/
-COPY --from=prep /usr/lib/ /usr/lib/
+COPY --from=prep /rootfs/ /
 
 # ModSecurity shared libraries
-COPY --from=prep /usr/local/modsecurity/lib/ /usr/local/modsecurity/lib/
 
 # Nginx binary + modules
 COPY --from=prep /usr/sbin/nginx /usr/sbin/nginx
@@ -283,7 +313,7 @@ COPY --from=prep /usr/share/nginx/ /usr/share/nginx/
 COPY --from=prep /etc/image-versions /etc/image-versions
 
 # Musl library path config
-COPY --from=prep /etc/ld-musl-x86_64.path /etc/ld-musl-x86_64.path
+COPY --from=prep /etc/ld-musl-*.path /etc/
 
 # TLS trust store + timezone data
 COPY --from=prep /etc/ssl/ /etc/ssl/
