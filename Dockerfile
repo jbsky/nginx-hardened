@@ -75,7 +75,7 @@ RUN echo "export NGINX_VER=$(cat /tmp/NGINX_VER)" >> /etc/profile.d/ver.sh && \
 
 # Build deps — split into multiple RUN to stay within proxy timeouts
 RUN apk add --no-cache \
-    autoconf automake byacc curl curl-dev flex g++ gcc geoip-dev git \
+    autoconf automake byacc curl curl-dev flex g++ gcc git \
     gnupg libc-dev libmaxminddb-dev libstdc++ libtool libxml2-dev \
     linux-headers lmdb-dev make openssl-dev pcre2-dev yajl-dev zlib-dev
 
@@ -207,7 +207,7 @@ SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 RUN sed -i 's|https://|http://|g' /etc/apk/repositories \
  && apk add --no-cache \
         ca-certificates libcurl libgcc libmaxminddb libstdc++ \
-        libxml2 lmdb openssl pcre2 tzdata yajl zlib geoip \
+        libxml2 lmdb openssl pcre2 tzdata yajl zlib \
         tini-static
 
 # 2/2  Create user
@@ -256,11 +256,17 @@ RUN --mount=type=cache,target=/var/cache/apk \
  && mkdir -p /rootfs \
  && test -n "$(find /usr/lib/nginx/modules -name '*.so' -print -quit)" \
  && { lddtree -l /usr/sbin/nginx; \
-      find /usr/lib/nginx/modules -name '*.so' -exec lddtree -l {} +; } > /tmp/closure.list \
+      find /usr/lib/nginx/modules -name '*.so' -exec lddtree -l {} +; } \
+      > /tmp/closure.list 2> /tmp/closure.err \
+ && if grep -q 'Not found' /tmp/closure.list /tmp/closure.err; then \
+      echo "closure incomplete -- a dependency is missing from this stage:" >&2; \
+      grep 'Not found' /tmp/closure.list /tmp/closure.err >&2; \
+      exit 1; \
+    fi \
  && sort -u /tmp/closure.list -o /tmp/closure.list \
  && tar -cf /tmp/closure.tar -T /tmp/closure.list \
  && tar -xf /tmp/closure.tar -C /rootfs \
- && rm -f /tmp/closure.list /tmp/closure.tar
+ && rm -f /tmp/closure.list /tmp/closure.err /tmp/closure.tar
 
 # libmodsecurity lives outside /usr/lib and is resolved through
 # /etc/ld-musl-*.path, which lddtree does not read -- copied by hand, and only
