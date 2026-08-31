@@ -82,6 +82,12 @@ RUN apk add --no-cache \
 WORKDIR /opt
 
 # --- ModSecurity v3 ---
+# libmodsecurity is stripped here, next to the build that produces it. The
+# stripping a few stages down covers `nginx` and the dynamic modules only, and
+# this library was never in that list: it shipped with its debug_info, 56,5 Mo
+# where 2,5 Mo do the same job -- a quarter of the whole image, for symbols no
+# runtime reads. `strip` leaves .dynsym alone, so the 3400 exported symbols the
+# module links against are all still there.
 # hadolint ignore=DL3003
 RUN . /etc/profile.d/ver.sh && \
     git clone -b "v${MODSEC_VER}" --depth 1 \
@@ -92,6 +98,8 @@ RUN . /etc/profile.d/ver.sh && \
     ./configure --with-lmdb --with-pcre2 && \
     make -j"$(nproc)" && \
     make install && \
+    find /usr/local/modsecurity/lib -name 'libmodsecurity.so*' -type f \
+      -exec strip {} + && \
     cd /opt && rm -rf ModSecurity
 
 # --- Nginx modules sources ---
@@ -251,6 +259,16 @@ RUN chmod 755 /usr/sbin/nginx \
 # The nginx dynamic modules are dlopen'd, so they are closure roots, enumerated
 # with find rather than a glob: busybox sh hands an unmatched glob through
 # literally. The build stops if that enumeration is empty.
+#
+# lddtree prints each binary it is handed, so this list holds the roots as well
+# as their dependencies -- and every one of those roots is copied again, on its
+# own COPY line, in the final stage. Layers are not deduplicated, so nginx and its dynamic modules was
+# going out twice: 1,33 Mo of this image. The roots keep their individual COPY
+# and are filtered out of the tar input here; what this archive carries is the
+# dependencies and the loader.
+#
+# The completeness check runs on the UNFILTERED list, above: a filter must
+# never be able to hide a missing dependency.
 RUN --mount=type=cache,target=/var/cache/apk \
     apk add --no-cache lddtree \
  && mkdir -p /rootfs \
@@ -264,9 +282,10 @@ RUN --mount=type=cache,target=/var/cache/apk \
       exit 1; \
     fi \
  && sort -u /tmp/closure.list -o /tmp/closure.list \
- && tar -cf /tmp/closure.tar -T /tmp/closure.list \
+ && grep -v -E '^/usr/sbin/nginx$|^/usr/lib/nginx/modules/' /tmp/closure.list > /tmp/closure.deps \
+ && tar -cf /tmp/closure.tar -T /tmp/closure.deps \
  && tar -xf /tmp/closure.tar -C /rootfs \
- && rm -f /tmp/closure.list /tmp/closure.err /tmp/closure.tar
+ && rm -f /tmp/closure.list /tmp/closure.deps /tmp/closure.err /tmp/closure.tar
 
 # libmodsecurity lives outside /usr/lib and is resolved through
 # /etc/ld-musl-*.path, which lddtree does not read -- copied by hand, and only
