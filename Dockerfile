@@ -18,7 +18,7 @@
 # ---------------------------------------------------------------------------
 # Stage 0: fetcher — resout les dernieres versions stables
 # ---------------------------------------------------------------------------
-FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS fetcher
+FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS fetcher
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
@@ -56,7 +56,7 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------
 # Stage 1: builder — compile tout from source
 # ---------------------------------------------------------------------------
-FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS builder
+FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS builder
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
@@ -180,8 +180,8 @@ RUN . /etc/profile.d/ver.sh && \
       --add-dynamic-module=/opt/nginx-module-vts \
       --add-dynamic-module=/opt/headers-more-nginx-module && \
     make -j"$(nproc)" && make install && \
-    strip /usr/sbin/nginx && \
-    strip /usr/lib/nginx/modules/*.so
+    find /usr/sbin /usr/lib/nginx -type f \( -executable -o -name '*.so*' \) \
+      -exec strip --strip-unneeded {} +
 
 # --- GeoIP databases (db-ip free, current month) ---
 ARG GEO_DB_RELEASE=""
@@ -207,7 +207,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags='-s -w' -o /init .
 # ---------------------------------------------------------------------------
 # Stage 3: prep (assemble runtime filesystem)
 # ---------------------------------------------------------------------------
-FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS prep
+FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS prep
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
@@ -315,40 +315,40 @@ LABEL org.opencontainers.image.title="nginx-waf-hardened" \
       security.hardening.features="from-scratch,go-init,tini-pid1,zero-shell,non-root,compiler-hardening,cosign-signed,sbom,slsa-provenance"
 
 # User accounts
-COPY --from=prep /etc/passwd /etc/passwd
-COPY --from=prep /etc/group  /etc/group
+COPY --link --from=prep /etc/passwd /etc/passwd
+COPY --link --from=prep /etc/group  /etc/group
 
 # Dynamic linker (musl) + shared libraries
-COPY --from=prep /rootfs/ /
+COPY --link --from=prep /rootfs/ /
 
 # ModSecurity shared libraries
 
 # Nginx binary + modules
-COPY --from=prep /usr/sbin/nginx /usr/sbin/nginx
-COPY --from=prep /usr/lib/nginx/modules/ /usr/lib/nginx/modules/
-COPY --from=prep /etc/nginx/ /etc/nginx/
+COPY --link --from=prep /usr/sbin/nginx /usr/sbin/nginx
+COPY --link --from=prep /usr/lib/nginx/modules/ /usr/lib/nginx/modules/
+COPY --link --from=prep /etc/nginx/ /etc/nginx/
 
 # OWASP CRS rules
-COPY --from=prep /usr/local/owasp-modsecurity-crs/ /usr/local/owasp-modsecurity-crs/
+COPY --link --from=prep /usr/local/owasp-modsecurity-crs/ /usr/local/owasp-modsecurity-crs/
 
 # Custom error pages + html
-COPY --from=prep /usr/share/nginx/ /usr/share/nginx/
+COPY --link --from=prep /usr/share/nginx/ /usr/share/nginx/
 
 # Version info
-COPY --from=prep /etc/image-versions /etc/image-versions
+COPY --link --from=prep /etc/image-versions /etc/image-versions
 
 # Musl library path config
-COPY --from=prep /etc/ld-musl-*.path /etc/
+COPY --link --from=prep /etc/ld-musl-*.path /etc/
 
 # TLS trust store + timezone data
-COPY --from=prep /etc/ssl/ /etc/ssl/
-COPY --from=prep /usr/share/zoneinfo/ /usr/share/zoneinfo/
+COPY --link --from=prep /etc/ssl/ /etc/ssl/
+COPY --link --from=prep /usr/share/zoneinfo/ /usr/share/zoneinfo/
 
 # PID 1 — tini-static (no musl dependency for PID 1 reliability)
-COPY --from=prep /sbin/tini-static /sbin/tini
+COPY --link --from=prep /sbin/tini-static /sbin/tini
 
 # Go init binary (static, entrypoint + healthcheck + setup-dirs)
-COPY --from=gobuilder /init /usr/local/bin/init
+COPY --link --from=gobuilder /init /usr/local/bin/init
 
 # Create runtime directories with correct ownership (no shell needed)
 RUN ["/usr/local/bin/init", "--setup-dirs"]
