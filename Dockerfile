@@ -138,6 +138,13 @@ RUN . /etc/profile.d/ver.sh && \
 
 # Compile Nginx with hardening flags
 # hadolint ignore=SC2086,DL3003
+# nginx s'installe dans la racine du stage (pas de DESTDIR) : --sbin-path et
+# --modules-path ecrivent directement dans /usr/sbin et /usr/lib/nginx. Le strip
+# ne peut donc pas balayer /usr/sbin en entier -- il y trouve les scripts shell
+# poses par apk (addgnupghome, applygnupgdefaults de gnupg), et `strip` sort en
+# 1 sur le premier avec "file format not recognized", ce qui a casse le build du
+# 31/08. Les deux seuls chemins que cette etape produit sont nommes : le binaire
+# et le repertoire des modules, ou tout est ELF par construction.
 RUN . /etc/profile.d/ver.sh && \
     cd "/usr/src/nginx-${NGINX_VER}" && \
     ./configure \
@@ -180,7 +187,7 @@ RUN . /etc/profile.d/ver.sh && \
       --add-dynamic-module=/opt/nginx-module-vts \
       --add-dynamic-module=/opt/headers-more-nginx-module && \
     make -j"$(nproc)" && make install && \
-    find /usr/sbin /usr/lib/nginx -type f \( -executable -o -name '*.so*' \) \
+    find /usr/sbin/nginx /usr/lib/nginx/modules -type f \( -executable -o -name '*.so*' \) \
       -exec strip --strip-unneeded {} +
 
 # --- GeoIP databases (db-ip free, current month) ---
