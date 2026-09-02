@@ -261,6 +261,41 @@ jobs:
           sarif_file: trivy-nginx.sarif
           category: version-watch
 
+      # version-watch publie l'image lui-meme -- build-push.yml n'est pas dans
+      # la boucle -- donc il doit aussi rendre le README, sinon un bump
+      # automatique livre une nouvelle version de nginx pendant que la doc
+      # continue de nommer la precedente. Meme reflexe que le correctif
+      # dual-registry plus haut : tout chemin de publication est un chemin de
+      # publication, y compris un cron de veille de version.
+      - name: Refresh README
+        env:
+          NGINX_VER: ${{ needs.check.outputs.nginx_ver }}
+          REVISION_TAG: ${{ steps.revision.outputs.tag }}
+        run: |
+          set -euo pipefail
+          SPEC="jbsky/nginx-waf-hardened=${NGINX_VER}=${REVISION_TAG}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            ./scripts/update-readme-tags.sh "$SPEC"
+            # `git diff --quiet && exit 0` would abort the step under `set -e`
+            # on the branch where there IS a change: use an explicit if.
+            if git diff --quiet README.md; then
+              echo "README already names the current tag"
+              exit 0
+            fi
+            git add README.md
+            git commit -m "docs(readme): tag immuable courant [skip ci]"
+            if git push; then
+              exit 0
+            fi
+            echo "push rejete (publish concurrent) -- on repart de origin/main"
+            git fetch origin main
+            git reset --hard origin/main
+          done
+          echo "::error::README: 3 tentatives perdues face a des publish concurrents"
+          exit 1
+
   # -------------------------------------------------------------------
   cleanup:
     name: Prune old registry tags

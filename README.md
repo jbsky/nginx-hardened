@@ -75,6 +75,12 @@ docker build \
   .
 ```
 
+Les trois versions sont volontairement absentes de ce README. Seule celle de
+Nginx est rendue par la CI (tableau et exemples ci-dessus) ; ModSecurity et CRS
+ne sont nulle part, parce qu'une valeur qui n'est ni resolue ni rendue derive en
+silence -- la garde de `scripts/update-readme-tags.sh` ne connait que la famille
+de version de l'image et ne les rattraperait pas.
+
 ## Usage rapide
 
 ```bash
