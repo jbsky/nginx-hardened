@@ -47,6 +47,10 @@ inaccessible. **En production, epinglez le tag qui porte le compteur.**
 | `jbsky/nginx-waf-hardened` | `1.30.4` | `1.30.4.14` |
 <!-- END:tags -->
 
+Ce tableau, les versions citees dans le texte et les tags qui apparaissent
+dans les exemples sont tous rendus par `scripts/update-readme-tags.sh` apres
+chaque publication -- ne rien editer a la main.
+
 Le compteur compte les commits qui touchent les inputs de l'image (`Dockerfile`,
 `conf/`, `errors/`). Un commit qui ne touche que `.github/` ne l'incremente pas.
 
@@ -65,9 +69,9 @@ Pour forcer une version :
 
 ```bash
 docker build \
-  --build-arg NGINX_VER=1.30.4 \
-  --build-arg MODSEC_VER=3.0.14 \
-  --build-arg OWASP_CRS_VER=4.13.0 \
+  --build-arg NGINX_VER=<version> \
+  --build-arg MODSEC_VER=<version> \
+  --build-arg OWASP_CRS_VER=<version> \
   .
 ```
 
