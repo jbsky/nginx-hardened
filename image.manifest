@@ -1,12 +1,11 @@
 # image-manifest v1
-# image : jbsky/nginx-waf-hardened:latest
+# image : nginx-waf-hardened
 # genere par scripts/image-manifest.py -- ne pas editer a la main
 
 f 0644 0:0 - etc/group
 f 0644 0:0 - etc/image-versions
 f 0644 0:0 - etc/ld-musl-x86_64.path
 f 0644 0:1999 - etc/nginx/conf.d/default.conf
-f 0644 0:0 - etc/nginx/geoip/dbip-city-lite.mmdb
 f 0644 0:0 - etc/nginx/geoip/dbip-country-lite.mmdb
 f 0644 0:0 - etc/nginx/mime.types
 f 0644 0:0 - etc/nginx/modsec/crs-rules.conf
@@ -72,7 +71,7 @@ f 0755 0:0 elf usr/local/modsecurity/lib/libmodsecurity.so.3.0.16
 f 0755 0:0 elf usr/sbin/nginx
 
 count 239 etc/ssl/certs/
-count 318 usr/local/owasp-modsecurity-crs/
+count 314 usr/local/owasp-modsecurity-crs/
 count 631 usr/share/
 count 20 var/
 
