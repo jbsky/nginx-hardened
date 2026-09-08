@@ -115,7 +115,11 @@ RUN . /etc/profile.d/ver.sh && \
     rm -rf /usr/local/owasp-modsecurity-crs/.git \
            /usr/local/owasp-modsecurity-crs/.github \
            /usr/local/owasp-modsecurity-crs/tests \
-           /usr/local/owasp-modsecurity-crs/docs && \
+           /usr/local/owasp-modsecurity-crs/docs \
+           /usr/local/owasp-modsecurity-crs/README.md \
+           /usr/local/owasp-modsecurity-crs/plugins/README.md \
+           /usr/local/owasp-modsecurity-crs/util/README \
+           /usr/local/owasp-modsecurity-crs/util/crs-rules-check/README.md && \
     if [ -f /usr/local/owasp-modsecurity-crs/crs-setup.conf.example ] && \
        [ ! -f /usr/local/owasp-modsecurity-crs/crs-setup.conf ]; then \
       cp /usr/local/owasp-modsecurity-crs/crs-setup.conf.example \
@@ -190,14 +194,47 @@ RUN . /etc/profile.d/ver.sh && \
     find /usr/sbin/nginx /usr/lib/nginx/modules -type f \( -executable -o -name '*.so*' \) \
       -exec strip --strip-unneeded {} +
 
-# --- GeoIP databases (db-ip free, current month) ---
+# --- GeoIP database (db-ip free) ---
+# UNE SEULE base. La conf ne declare qu'un bloc geoip2, sur country :
+#   geoip2 /etc/nginx/geoip/dbip-country-lite.mmdb { $geoip2_data_country_code ... }
+# La base CITY etait telechargee, decompressee et embarquee sans qu'aucune
+# directive ne la lise -- 127 339 927 o, 78 % d'une image de 164 Mo, pour rien.
+# Sa seule mention dans tout le depot etait la ligne qui la creait.
+#
+# La date n'arrivait PAS dans l'URL, et l'etape etait cassee. Deux mecanismes
+# se sont ajoutes, tous deux constates au build et invisibles a la lecture :
+#
+# 1. BuildKit substitue les ARG DECLARES dans la ligne RUN avant que le shell
+#    ne s'execute. `${GEO_DB_RELEASE}` devenait la chaine vide et l'URL partait
+#    en `dbip-country-lite-.mmdb.gz` -- sur laquelle db-ip repond 404. Le repli
+#    shell s'executait trop tard pour servir a quoi que ce soit.
+#
+# 2. Echapper en `\${...}` ne repare rien, ca aggrave : BuildKit ne retire pas
+#    l'antislash, il le transmet, et `\$` entre guillemets doubles est un `$`
+#    LITTERAL pour le shell. L'URL est alors partie avec `${GEO_DB}` en toutes
+#    lettres. L'affichage `>` de BuildKit montre la ligne SANS l'antislash, ce
+#    qui donne un log rassurant et faux ; seule la ligne ERROR dit la verite.
+#
+# La regle qui marche : donner a la variable du shell un NOM QUE BUILDKIT NE
+# CONNAIT PAS. Il ne substitue que les ARG declares et laisse le reste passer
+# intact -- c'est deja ce qui fait fonctionner `${attempt}` ailleurs dans la
+# flotte. GEO_DB et PREV ne sont pas des ARG, donc c'est bien le shell qui les
+# developpe, apres l'affectation.
+#
+# Le repli sur le mois precedent n'est pas du zele : db-ip ne publie le fichier
+# d'un mois qu'une fois ce mois entame, donc un build le 1er tombe sur un 404.
+# Verifie le 2026-09-08 : 2026-09 -> 200 (4 116 896 o), 2026-08 -> 200.
 ARG GEO_DB_RELEASE=""
-RUN GEO_DB_RELEASE="${GEO_DB_RELEASE:-$(date +%Y-%m)}" && \
+RUN GEO_DB="${GEO_DB_RELEASE:-$(date +%Y-%m)}" && \
+    PREV="$(date -d "@$(( $(date +%s) - 2592000 ))" +%Y-%m)" && \
     mkdir -p /etc/nginx/geoip && \
-    curl -fsSL "https://download.db-ip.com/free/dbip-city-lite-${GEO_DB_RELEASE}.mmdb.gz" \
-      | gzip -d > /etc/nginx/geoip/dbip-city-lite.mmdb && \
-    curl -fsSL "https://download.db-ip.com/free/dbip-country-lite-${GEO_DB_RELEASE}.mmdb.gz" \
-      | gzip -d > /etc/nginx/geoip/dbip-country-lite.mmdb
+    for m in "${GEO_DB}" "${PREV}"; do \
+      if curl -fsSL "https://download.db-ip.com/free/dbip-country-lite-${m}.mmdb.gz" \
+           | gzip -d > /etc/nginx/geoip/dbip-country-lite.mmdb; then \
+        echo "GeoIP country database: ${m}"; break; \
+      fi; \
+    done && \
+    test -s /etc/nginx/geoip/dbip-country-lite.mmdb
 
 # --- Persist resolved versions for downstream consumption ---
 RUN . /etc/profile.d/ver.sh && \
