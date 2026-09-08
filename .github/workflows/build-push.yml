@@ -123,6 +123,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Le job de test demarre la stack avec `docker compose up --no-build`,
+      # qui va chercher le nom d'image ecrit dans docker-compose.yml. Taguer
+      # l'image fraichement construite sous un AUTRE nom laissait compose tirer
+      # l'image PUBLIEE depuis Docker Hub : les tests fonctionnels passaient au
+      # vert sur l'ancienne image, jamais sur celle qu'on s'appretait a
+      # publier. On demande donc son nom a compose plutot que de le reecrire.
+      - name: Resolve compose's expected local tag
+        id: compose-image
+        run: echo "tag=$(docker compose config --images nginx)" >> "$GITHUB_OUTPUT"
+
       - name: Make room for local tarball export (PR only)
         if: env.PUBLISH != 'true'
         run: mkdir -p /tmp/image-tar
@@ -134,7 +144,7 @@ jobs:
           context: .
           platforms: linux/amd64
           outputs: ${{ env.PUBLISH == 'true' && format('type=image,name={0}/{1}/{2},push-by-digest=true,name-canonical=true,push=true', env.REGISTRY, env.NAMESPACE, env.IMAGE_NAME) || 'type=docker,dest=/tmp/image-tar/image.tar' }}
-          tags: ${{ env.PUBLISH != 'true' && format('{0}:latest', env.IMAGE_NAME) || '' }}
+          tags: ${{ env.PUBLISH != 'true' && steps.compose-image.outputs.tag || '' }}
           sbom: ${{ env.PUBLISH }}
           provenance: ${{ env.PUBLISH == 'true' && 'mode=max' || 'false' }}
           build-args: |
@@ -177,12 +187,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve compose's expected local tag
+        id: compose-image
+        run: echo "tag=$(docker compose config --images nginx)" >> "$GITHUB_OUTPUT"
+
       - name: Pull built digest for testing
         if: env.PUBLISH == 'true'
         run: |
           set -euo pipefail
           docker pull "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}"
-          docker tag  "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}" "${{ env.IMAGE_NAME }}:latest"
+          docker tag  "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}" "${{ steps.compose-image.outputs.tag }}"
 
       - name: Download image tarball (PR only)
         if: env.PUBLISH != 'true'
@@ -239,7 +253,7 @@ jobs:
       # echoue ici ; si elle est voulue, regenerer le manifeste DANS LE MEME
       # COMMIT -- c'est le diff qu'on relit dans la PR.
       - name: Image manifest
-        run: ./scripts/image-manifest.py --check nginx-waf-hardened:latest -m image.manifest
+        run: ./scripts/image-manifest.py --check "${{ steps.compose-image.outputs.tag }}" -m image.manifest
 
       - name: Run smoke tests
         run: ./scripts/test.sh 127.0.0.1 80
