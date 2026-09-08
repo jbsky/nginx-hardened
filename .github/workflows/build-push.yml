@@ -13,6 +13,8 @@ on:
       - 'Dockerfile'
       - 'conf/**'
       - 'errors/**'
+      - 'scripts/image-manifest.py'
+      - 'image.manifest'
       - '.github/workflows/build-push.yml'
   pull_request:
     branches: [main]
@@ -228,6 +230,16 @@ jobs:
             printf 'probe output:\n%s\n' "$raw" | head -5
             exit 1
           fi
+
+      # Le manifeste dit ce qui est DANS l'image : chemins, modes, uid/gid,
+      # capabilities de fichier, et doublons de contenu. Rien d'autre dans
+      # cette chaine ne regarde ca -- hadolint lit le Dockerfile (il verifie
+      # qu'une ligne existe, pas qu'elle a marche), et Trivy ne parle que de
+      # paquets, dont une image FROM scratch n'a plus aucun. Toute derive
+      # echoue ici ; si elle est voulue, regenerer le manifeste DANS LE MEME
+      # COMMIT -- c'est le diff qu'on relit dans la PR.
+      - name: Image manifest
+        run: ./scripts/image-manifest.py --check nginx-waf-hardened:latest -m image.manifest
 
       - name: Run smoke tests
         run: ./scripts/test.sh 127.0.0.1 80
