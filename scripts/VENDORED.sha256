@@ -1,0 +1,12 @@
+# Empreintes des scripts PARTAGES par les six depots durcis.
+# Ces fichiers doivent rester byte-a-byte identiques d'un depot a l'autre :
+# les modifier ici seulement, sans les repercuter ailleurs, fait diverger
+# silencieusement ce que les six CI testent.
+# Verification en CI : sha256sum -c scripts/VENDORED.sha256
+# Verification inter-depots : opencode-profile/scripts/check-vendored-sync.sh
+42f26a38913915d2e24fcf972a0357b12e9b17807895bcfb9049fdbbd7f18fb2  scripts/build-revision.sh
+fad19ea7abba6750048b6693d91b574c1b167c7c474a0feb8d763274ca9d79c9  scripts/check-image-closure.sh
+5b9fa34079d4a4fd74ea4f272acb31f02624ad479abf78f064ccbd171df7862d  scripts/image-manifest.py
+71ab2f04b0e887d129ed8317ee6bf3919848f8814e5246ba65ceacaca5a2c4a5  scripts/prune-ghcr-tags.sh
+6d570844d7013be8b5d39f0606c9f71c32860e1b311ad7aeb192a8b4cba8d07a  scripts/prune-registry-tags.sh
+dd8ed82747ab15ae238679195bcfaef9221d89fe74f27e49a354a12fcc1f2eec  scripts/update-readme-tags.sh

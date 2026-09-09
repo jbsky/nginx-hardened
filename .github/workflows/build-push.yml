@@ -13,7 +13,12 @@ on:
       - 'Dockerfile'
       - 'conf/**'
       - 'errors/**'
-      - 'scripts/image-manifest.py'
+      # init.go et go.mod ne figuraient pas ici : une correction du binaire
+      # d'entree ne declenchait donc aucun build.
+      - 'init.go'
+      - 'init_test.go'
+      - 'go.mod'
+      - 'scripts/**'
       - 'image.manifest'
       - '.github/workflows/build-push.yml'
   pull_request:
@@ -50,6 +55,35 @@ jobs:
         uses: ludeeus/action-shellcheck@master
         with:
           scandir: ./scripts
+
+      # Six depots publics et autonomes portent les MEMES scripts, dupliques
+      # parce qu'ils ne peuvent pas se referencer. Rien ne les tenait alignes
+      # que la discipline. Toucher un script partage oblige desormais a
+      # toucher sa reference, donc a le voir dans le diff de la PR. La
+      # divergence ENTRE depots se voit avec
+      # opencode-profile/scripts/check-vendored-sync.sh, qui a les six clones.
+      - name: Vendored scripts unchanged
+        run: sha256sum -c scripts/VENDORED.sha256
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          set -euo pipefail
+          fmt_out=$(gofmt -l .)
+          if [ -n "$fmt_out" ]; then
+            echo "::error::gofmt found unformatted files:"
+            echo "$fmt_out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
 
   # -------------------------------------------------------------------
   #  Resolve upstream versions ONCE, shared by amd64 (test) and arm64
@@ -153,6 +187,65 @@ jobs:
             OWASP_CRS_VER=${{ needs.resolve-versions.outputs.crs }}
           cache-from: type=gha,scope=nginx-waf-linux/amd64
           cache-to: type=gha,mode=max,scope=nginx-waf-linux/amd64
+          # Le stage `prep` porte les paquets Alpine qui finissent dans
+          # l'image. Le servir depuis le cache GHA rend deux controles
+          # menteurs a la fois : le manifeste compare l'image a une reference
+          # generee sur un build frais, et le scan CVE du meme stage examine
+          # des paquets perimes. Un controle dont le resultat depend de l'age
+          # d'un cache invisible ne controle rien. Le cout est un `apk add`.
+          no-cache-filters: prep
+
+      # Le stage `prep` est la seule Alpine qui reste lisible par un scanner :
+      # il contient exactement les paquets runtime qui seront copies dans
+      # l'image finale `FROM scratch`, ou plus aucun scanner ne saura dire de
+      # quel paquet vient un fichier. Viser `builder` scannerait la chaine de
+      # compilation, qui n'entre dans aucune image.
+      #
+      # Deux comportements dans la meme etape, volontairement dissocies :
+      # le SARIF remonte CRITICAL+HIGH pour que tout soit visible dans
+      # l'onglet Security ; l'echec est reserve aux CRITICAL *corrigeables*
+      # en amont (`ignore-unfixed`), pour qu'un job rouge veuille toujours
+      # dire « un upgrade du stage prep corrige une faille critique » --
+      # jamais « Alpine a publie un avis et on ne peut rien y faire ».
+      - name: Build prep stage (Alpine with runtime deps)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: prep
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.IMAGE_NAME }}-prep:scan
+          no-cache-filters: prep
+          build-args: |
+            NGINX_VER=${{ needs.resolve-versions.outputs.nginx }}
+            MODSEC_VER=${{ needs.resolve-versions.outputs.modsec }}
+            OWASP_CRS_VER=${{ needs.resolve-versions.outputs.crs }}
+          cache-from: type=gha,scope=nginx-waf-linux/amd64
+
+      - name: Trivy scan prep stage (report CRITICAL+HIGH)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}-prep:scan
+          format: sarif
+          output: trivy-prep.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+          ignore-unfixed: true
+
+      - name: Upload prep SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-prep.sarif
+          category: ${{ env.IMAGE_NAME }}-deps
+
+      - name: Trivy gate prep stage (fail on fixable CRITICAL)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}-prep:scan
+          format: table
+          severity: CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
 
       - name: Upload image tarball (PR only, for the test job)
         if: env.PUBLISH != 'true'
@@ -255,6 +348,16 @@ jobs:
       - name: Image manifest
         run: ./scripts/image-manifest.py --check "${{ steps.compose-image.outputs.tag }}" -m image.manifest
 
+      # `lddtree` signale une dependance introuvable sur stderr et sort quand
+      # meme en 0 : un build peut donc publier une image `FROM scratch` a
+      # laquelle il manque une bibliotheque, l'erreur ne sortant qu'au
+      # demarrage du conteneur, en production. Constate le 2026-08-28 sur
+      # clamav-hardened (libbz2.so.1) et suricata (dix modules Python). Ici on
+      # demande au vrai chargeur musl, dans un chroot sur le filesystem de
+      # l'image, de resoudre chaque ELF embarque.
+      - name: Image closure
+        run: ./scripts/check-image-closure.sh "${{ steps.compose-image.outputs.tag }}"
+
       - name: Run smoke tests
         run: ./scripts/test.sh 127.0.0.1 80
 
@@ -314,6 +417,10 @@ jobs:
           outputs: type=image,"name=${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}",push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=nginx-waf-linux/arm64
           cache-to: type=gha,mode=max,scope=nginx-waf-linux/arm64
+          # Meme raison que sur amd64, et une de plus : deux arches servies
+          # depuis des caches d'ages differents publieraient des versions de
+          # bibliotheques differentes sous un seul tag.
+          no-cache-filters: prep
 
   # -------------------------------------------------------------------
   #  Merges build's tested amd64 digest with build-arm64's digest into the
