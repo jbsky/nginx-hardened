@@ -20,10 +20,10 @@ import (
 )
 
 const (
-	nginxUID     = 1999
-	nginxGID     = 1999
-	healthURL    = "http://127.0.0.1:80/healthz"
-	defaultConf  = "/etc/nginx/nginx.conf"
+	nginxUID    = 1999
+	nginxGID    = 1999
+	healthURL   = "http://127.0.0.1:80/healthz"
+	defaultConf = "/etc/nginx/nginx.conf"
 )
 
 func main() {
@@ -148,7 +148,7 @@ func healthcheck() int {
 // ---------------------------------------------------------------------------
 
 func entrypoint() error {
-	conf := envGet("NGINX_CONF", defaultConf)
+	conf := env("NGINX_CONF", defaultConf)
 
 	if !exists(conf) {
 		return fmt.Errorf("config file %s not found", conf)
@@ -177,7 +177,7 @@ func entrypoint() error {
 // Helpers
 // ---------------------------------------------------------------------------
 
-func envGet(key, def string) string {
+func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
@@ -207,25 +207,29 @@ func execCmd(args []string) error {
 	return syscall.Exec(bin, args, os.Environ())
 }
 
+// writeOK dit si un repertoire accepte reellement une ecriture. mkdir + chmod
+// + chown peuvent tous reussir sur un point de montage en lecture seule :
+// seule une ecriture le prouve.
+func writeOK(dir string) bool {
+	tmp, err := os.CreateTemp(dir, ".write-test-*")
+	if err != nil {
+		return false
+	}
+	name := tmp.Name()
+	tmp.Close()
+	os.Remove(name)
+	return true
+}
+
 func ensureWritable(path string, uid, gid int) error {
 	if !exists(path) {
 		return nil
 	}
-	tmp, err := os.CreateTemp(path, ".write-test-*")
-	if err == nil {
-		name := tmp.Name()
-		tmp.Close()
-		os.Remove(name)
+	if writeOK(path) {
 		return nil
 	}
-	if chErr := chownRecursive(path, uid, gid); chErr == nil {
-		tmp2, err2 := os.CreateTemp(path, ".write-test-*")
-		if err2 == nil {
-			name := tmp2.Name()
-			tmp2.Close()
-			os.Remove(name)
-			return nil
-		}
+	if chErr := chownRecursive(path, uid, gid); chErr == nil && writeOK(path) {
+		return nil
 	}
 	return fmt.Errorf("%s is not writable by uid %d", path, os.Getuid())
 }

@@ -28,11 +28,12 @@ volee, en memoire, UNIQUEMENT pour trouver deux chemins de meme contenu.
 
 import argparse
 import hashlib
+import re
 import subprocess
 import sys
 import tarfile
 
-VERSION = "image-manifest v1"
+VERSION = "image-manifest v2"
 
 # Repertoires dont chaque entree est listee nominativement, quel que soit son type.
 BIN_DIRS = ("bin/", "sbin/", "usr/bin/", "usr/sbin/", "usr/local/bin/", "usr/local/sbin/")
@@ -184,19 +185,82 @@ def sous_arbres(entrees, listees):
     return comptes
 
 
+# Une release de bibliotheque : les chiffres qui suivent le soname.
+RELEASE = re.compile(r"^[0-9]+(\.[0-9]+)*$")
+# Un soname porteur d'ABI : libfoo.so.3, jamais libfoo.so.
+SONAME = re.compile(r"\.so\.[0-9]+$")
+
+
+def sonames(entrees):
+    """Rend {chemin reel: chemin affiche} pour les bibliotheques versionnees.
+
+    Une bibliotheque apk s'installe en deux temps : le soname
+    (`libpcre2-8.so.0`) est un lien vers le fichier de release
+    (`libpcre2-8.so.0.16.0`). Les chiffres de release bougent au rythme
+    d'Alpine, et deux constructeurs peuvent lire deux index differents A LA
+    MEME MINUTE -- constate le 2026-09-09, le runner de php a resolu 0.16.0
+    pendant que celui de suricata resolvait 0.15.0, cache de couches desactive
+    des deux cotes. Les enregistrer ferait virer la porte au rouge pour une
+    raison sans rapport avec le changement relu.
+
+    On enregistre donc le soname et le FAIT qu'une cible versionnee existe.
+    Ce que le manifeste continue d'attraper : une bibliotheque apparue ou
+    disparue, un mode, un uid, une capability, un doublon, et une rupture
+    d'ABI -- le soname est dans le nom. Ce qu'il ne dit plus : la version.
+    C'est le travail du scan CVE du stage `prep`, seul endroit de la chaine
+    ou un scanner sait encore lire des paquets.
+
+    La normalisation n'a lieu que si l'image DECLARE elle-meme le soname par
+    un lien : pas de lien, pas de collapse (`libpython3.14.so.1.0` reste
+    entier).
+    """
+    table = {}
+    for e in entrees:
+        if e["type"] != "l" or not e["cible"] or "/" in e["cible"]:
+            continue
+        base = e["nom"].rsplit("/", 1)[-1]
+        rep = e["nom"][: len(e["nom"]) - len(base)]
+        # Le lien doit DEJA porter le numero d'ABI (`libfoo.so.3`). Le lien
+        # generique `libfoo.so -> libfoo.so.3` ne compte pas : son suffixe
+        # n'est pas une release, c'est justement l'ABI qu'on veut garder.
+        # Sans cette garde, la chaine a trois maillons de varnish
+        # (`libvarnishapi.so` -> `.so.3` -> `.so.3.1.0`) perdait son `3`.
+        if not SONAME.search(base):
+            continue
+        if not e["cible"].startswith(base + "."):
+            continue
+        if not RELEASE.match(e["cible"][len(base) + 1:]):
+            continue
+        table[rep + e["cible"]] = rep + base + ".<version>"
+    return table
+
+
 def rendre(image, entrees, doublons):
     listees = {e["nom"] for e in entrees if nommee(e)}
+    table = sonames(entrees)
+
+    def aff(chemin):
+        return table.get(chemin, chemin)
+
     lignes = [f"# {VERSION}", f"# image : {image}",
               "# genere par scripts/image-manifest.py -- ne pas editer a la main", ""]
 
-    for e in sorted((e for e in entrees if e["nom"] in listees), key=lambda x: x["nom"]):
+    rendues = []
+    for e in (e for e in entrees if e["nom"] in listees):
         if e["type"] == "l":
-            lignes.append(f"l {e['nom']} -> {e['cible']}")
+            base = e["nom"].rsplit("/", 1)[-1]
+            rep = e["nom"][: len(e["nom"]) - len(base)]
+            cible = e["cible"]
+            if "/" not in cible:
+                cible = aff(rep + cible)[len(rep):]
+            rendues.append((aff(e["nom"]), f"l {aff(e['nom'])} -> {cible}"))
         else:
             suffixe = f" caps={e['caps']}" if e["caps"] else ""
             marque = "elf" if e["elf"] else "-"
-            lignes.append(f"{e['type']} {e['mode']:04o} {e['uid']}:{e['gid']} "
-                          f"{marque} {e['nom']}{suffixe}")
+            rendues.append((aff(e["nom"]),
+                            f"{e['type']} {e['mode']:04o} {e['uid']}:{e['gid']} "
+                            f"{marque} {aff(e['nom'])}{suffixe}"))
+    lignes.extend(l for _, l in sorted(rendues))
 
     comptes = sous_arbres(entrees, listees)
     if comptes:
@@ -206,7 +270,8 @@ def rendre(image, entrees, doublons):
 
     if doublons:
         lignes.append("")
-        for chemins, taille in doublons:
+        for chemins, taille in sorted((sorted(aff(c) for c in ch), t)
+                                      for ch, t in doublons):
             lignes.append(f"dup {len(chemins)} {taille} {' '.join(chemins)}")
 
     return "\n".join(lignes) + "\n"
