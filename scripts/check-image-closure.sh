@@ -22,21 +22,26 @@ set -eu
 
 ALPINE="alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
 RC=0
+SANS_LOADER=0
 
 [ "$#" -gt 0 ] || { echo "usage: $0 <image> [<image>...]" >&2; exit 2; }
 
 for img in "$@"; do
   printf '\n== %s\n' "$img"
 
+  # Une image nommee qu'on ne trouve pas est un ECHEC, pas un saut. Sauter
+  # rendrait ce script vert sur une faute de frappe dans le tag -- exactement
+  # le faux vert qu'il est cense empecher ailleurs.
   if ! docker image inspect "$img" >/dev/null 2>&1; then
     if ! docker pull -q "$img" >/dev/null 2>&1; then
-      echo "  [skip] image introuvable localement et pull impossible"
+      echo "  ECHEC -- image introuvable localement et pull impossible"
+      RC=1
       continue
     fi
   fi
 
   dir=$(mktemp -d)
-  cid=$(docker create "$img" 2>/dev/null) || { echo "  [skip] docker create a echoue"; rm -rf "$dir"; continue; }
+  cid=$(docker create "$img" 2>/dev/null) || { echo "  ECHEC -- docker create a echoue"; RC=1; rm -rf "$dir"; continue; }
   docker export "$cid" | tar -x -C "$dir" 2>/dev/null || true
   docker rm -f "$cid" >/dev/null 2>&1 || true
 
@@ -74,7 +79,8 @@ for img in "$@"; do
 
   case "$out" in
     *PAS-DE-LOADER*)
-      echo "  [skip] pas de chargeur musl (image statique ou non-Alpine)" ;;
+      echo "  [saute] pas de chargeur musl (image statique ou non-Alpine)"
+      SANS_LOADER=$((SANS_LOADER + 1)) ;;
     "")
       echo "  OK -- toutes les dependances sont resolues" ;;
     *)
@@ -85,6 +91,13 @@ for img in "$@"; do
 done
 
 echo
-[ "$RC" -eq 0 ] && echo "=== Toutes les clotures sont completes ===" \
-                || echo "=== Au moins une image a une cloture trouee ==="
+if [ "$RC" -ne 0 ]; then
+  echo "=== Au moins une image a une cloture trouee, ou n'a pas pu etre lue ==="
+elif [ "$SANS_LOADER" -gt 0 ]; then
+  # Ne jamais annoncer "toutes completes" quand une image n'a pas ete examinee :
+  # c'est la difference entre « rien a signaler » et « rien n'a tourne ».
+  echo "=== Clotures completes, mais $SANS_LOADER image(s) NON EXAMINEE(S) (pas de chargeur) ==="
+else
+  echo "=== Toutes les clotures sont completes ==="
+fi
 exit "$RC"
