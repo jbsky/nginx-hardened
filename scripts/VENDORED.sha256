@@ -6,7 +6,7 @@
 # Verification inter-depots : opencode-profile/scripts/check-vendored-sync.sh
 42f26a38913915d2e24fcf972a0357b12e9b17807895bcfb9049fdbbd7f18fb2  scripts/build-revision.sh
 b72ab4233d45a2b65ff1f180953fc5ababbe97e138bb9548643eca3b48a7f7da  scripts/check-image-closure.sh
-742216c4bd65b3437d3620e3c40e81dde9234d489a0f1f90e50e3b738f967ef8  scripts/image-manifest.py
+443eb784b819282f460cf352a9ad678dc959a0cc94c93fe9b3d4a259f6a4156c  scripts/image-manifest.py
 71ab2f04b0e887d129ed8317ee6bf3919848f8814e5246ba65ceacaca5a2c4a5  scripts/prune-ghcr-tags.sh
 6d570844d7013be8b5d39f0606c9f71c32860e1b311ad7aeb192a8b4cba8d07a  scripts/prune-registry-tags.sh
 dd8ed82747ab15ae238679195bcfaef9221d89fe74f27e49a354a12fcc1f2eec  scripts/update-readme-tags.sh
