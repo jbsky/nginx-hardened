@@ -178,4 +178,13 @@ COSIGN_REPOSITORY=ghcr.io/jbsky/nginx-waf-hardened \
 
 ## License
 
-BSD-2-Clause (same as Nginx)
+Le contenu de ce depot -- Dockerfile, `init.go`, scripts et chaine CI -- est
+sous **Apache-2.0**, voir [`LICENSE`](LICENSE). Copyright 2026 jbsky.
+
+Le logiciel embarque dans l'image garde la sienne : **nginx est sous
+BSD-2-Clause**, et ModSecurity comme l'OWASP Core Rule Set gardent celle de
+leur amont. Les deux plans ne se melangent pas -- `init.go` est un programme
+distinct, qui execute nginx sans etre lie a ses bibliotheques.
+
+Contributions : voir [`CONTRIBUTING.md`](CONTRIBUTING.md), un `Signed-off-by`
+est demande.
