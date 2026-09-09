@@ -348,6 +348,12 @@ jobs:
       - name: Image manifest
         run: ./scripts/image-manifest.py --check "${{ steps.compose-image.outputs.tag }}" -m image.manifest
 
+      # Le rapport se lit sur le manifeste, pas sur l'image : l'etape precedente
+      # vient de prouver que les deux coincident. Chaque build montre donc ce
+      # qu'il embarque sans qu'on ait a relire un diff pour s'en faire une idee.
+      - name: Image inventory (job summary)
+        run: ./scripts/image-manifest.py --report -m image.manifest >> "$GITHUB_STEP_SUMMARY"
+
       # `lddtree` signale une dependance introuvable sur stderr et sort quand
       # meme en 0 : un build peut donc publier une image `FROM scratch` a
       # laquelle il manque une bibliotheque, l'erreur ne sortant qu'au

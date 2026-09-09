@@ -277,17 +277,118 @@ def rendre(image, entrees, doublons):
     return "\n".join(lignes) + "\n"
 
 
+def lire_manifeste(texte):
+    """Reconstruit un inventaire depuis un manifeste ecrit. On repart du fichier
+    et non de l'image : `--check` a deja prouve, dans le meme job, que les deux
+    coincident. Le rapport ne coute donc ni docker ni export."""
+    f, l, cnt, dup = [], [], [], []
+    for ligne in texte.splitlines():
+        if not ligne.strip() or ligne.startswith("#"):
+            continue
+        ch = ligne.split()
+        if ch[0] in ("f", "d") and len(ch) >= 5:
+            caps = ch[5][5:] if len(ch) > 5 and ch[5].startswith("caps=") else ""
+            f.append({"mode": ch[1], "own": ch[2], "elf": ch[3] == "elf",
+                      "nom": ch[4], "caps": caps})
+        elif ch[0] == "l" and len(ch) >= 2:
+            l.append({"nom": ch[1], "cible": ch[3] if len(ch) > 3 else ""})
+        elif ch[0] == "count" and len(ch) >= 3:
+            cnt.append((int(ch[1]), ch[2]))
+        elif ch[0] == "dup" and len(ch) >= 4:
+            dup.append((int(ch[1]), int(ch[2]), ch[3:]))
+    return f, l, cnt, dup
+
+
+def rapporter(nom_image, texte):
+    """Rend en Markdown ce que le manifeste dit de l'image. Destine a
+    $GITHUB_STEP_SUMMARY : chaque build montre ce qu'il embarque, sans qu'on ait
+    a relire un diff de 150 lignes pour s'en faire une idee."""
+    f, l, cnt, dup = lire_manifeste(texte)
+    agrege = sum(n for n, _ in cnt)
+    total = len(f) + len(l) + agrege
+    elf = sum(1 for e in f if e["elf"])
+    bins = sorted(e["nom"] for e in f if e["nom"].startswith(BIN_DIRS))
+    caps = [(e["nom"], e["caps"]) for e in f if e["caps"]]
+    non_root = [e for e in f if e["own"] != "0:0"]
+    gachis = sum(t * (n - 1) for n, t, _ in dup)
+
+    modes = {}
+    for e in f:
+        modes[e["mode"]] = modes.get(e["mode"], 0) + 1
+
+    # Les deux gros blocs de donnees que presque toutes les images portent. Le
+    # manifeste agrege a `usr/share/`, pas a `usr/share/zoneinfo/` : on nomme donc
+    # les repertoires, pas leur contenu suppose.
+    socle = sum(n for n, d in cnt if d in ("usr/share/", "etc/ssl/certs/"))
+
+    o = [f"### Inventaire de `{nom_image}`", ""]
+    lien_s = "lien" if len(l) < 2 else "liens"
+    o.append(f"**{total}** chemins, dont **{len(f) + len(l)}** nommes "
+             f"({len(f)} fichiers / {len(l)} {lien_s}) et **{agrege}** agreges.")
+    if socle:
+        o.append(f"Dont **{socle}** chemins ({100 * socle // total} %) sous `usr/share/` et "
+                 f"`etc/ssl/certs/` -- des donnees, pas du code.")
+    o.append("")
+    o.append("| | |")
+    o.append("|---|---|")
+    o.append(f"| Fichiers ELF | {elf} |")
+    o.append(f"| Executables | {len(bins)} |")
+    o.append(f"| Modes | {', '.join(f'{m} x{n}' for m, n in sorted(modes.items()))} |")
+    o.append(f"| Hors `root:root` | {len(non_root) or 'aucun'} |")
+    o.append(f"| Capabilities | {', '.join(f'`{n}` {c}' for n, c in caps) or 'aucune'} |")
+    o.append(f"| Doublons | {len(dup)} groupe{'s' if len(dup) > 1 else ''}, "
+             f"{gachis // 1024} Kio |" if dup else "| Doublons | aucun |")
+    o.append("")
+    if bins:
+        o.append("<details><summary>Executables embarques</summary>", )
+        o.append("")
+        for b in bins:
+            o.append(f"- `{b}`")
+        o.append("")
+        o.append("</details>")
+        o.append("")
+    if cnt:
+        o.append("<details><summary>Repertoires agreges</summary>")
+        o.append("")
+        for n, d in sorted(cnt, key=lambda c: -c[0]):
+            o.append(f"- `{d}` : {n}")
+        o.append("")
+        o.append("</details>")
+        o.append("")
+    return "\n".join(o)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Inventaire verifiable d'une image durcie.")
     ap.add_argument("--generate", metavar="IMAGE")
     ap.add_argument("--check", metavar="IMAGE")
+    ap.add_argument("--report", action="store_true",
+                    help="rend le manifeste en Markdown (pour $GITHUB_STEP_SUMMARY)")
+    ap.add_argument("--name", metavar="NOM", help="nom affiche dans le rapport")
     ap.add_argument("-o", "--output", default="-")
     ap.add_argument("-m", "--manifest", default="image.manifest")
     a = ap.parse_args()
 
+    if a.report:
+        # Le rapport se lit sur le manifeste, jamais sur l'image : aucun docker,
+        # aucun export, et il reste vrai puisque --check compare les deux.
+        texte = open(a.manifest, encoding="utf-8").read()
+        nom = a.name
+        if not nom:
+            for ligne in texte.splitlines():
+                if ligne.startswith("# image :"):
+                    nom = ligne.split(":", 1)[1].strip()
+                    break
+        rendu = rapporter(nom or a.manifest, texte)
+        if a.output == "-":
+            sys.stdout.write(rendu + "\n")
+        else:
+            open(a.output, "w", encoding="utf-8").write(rendu + "\n")
+        return 0
+
     image = a.generate or a.check
     if not image:
-        ap.error("--generate ou --check est obligatoire")
+        ap.error("--generate, --check ou --report est obligatoire")
 
     entrees, doublons, alertes = scan(image)
     rendu = rendre(image, entrees, doublons)
