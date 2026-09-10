@@ -350,10 +350,13 @@ RUN rm -rf /lib/apk /lib/libapk* /var/cache/apk /etc/apk /sbin/apk
 # ---------------------------------------------------------------------------
 FROM scratch
 
+# `image.licenses` decrit le LOGICIEL EMBARQUE, pas ce depot (Apache-2.0, cf.
+# LICENSE) : nginx et les modules tiers sont en BSD-2-Clause, ModSecurity et
+# le Core Rule Set en Apache-2.0.
 LABEL org.opencontainers.image.title="nginx-waf-hardened" \
       org.opencontainers.image.description="Nginx WAF FROM scratch — ModSecurity v3, OWASP CRS, non-root, zero shell" \
       org.opencontainers.image.vendor="jbsky" \
-      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.licenses="BSD-2-Clause AND Apache-2.0" \
       org.opencontainers.image.source="https://github.com/jbsky/nginx-waf-hardened" \
       security.hardening.tier="platine" \
       security.hardening.features="from-scratch,go-init,tini-pid1,zero-shell,non-root,compiler-hardening,cosign-signed,sbom,slsa-provenance"
