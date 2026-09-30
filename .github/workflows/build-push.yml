@@ -576,7 +576,7 @@ jobs:
   update-readme:
     name: Refresh README tag block
     needs: [promote, resolve-versions]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -655,3 +655,49 @@ jobs:
             dist/nginx-waf-${{ github.ref_name }}.tar.gz
             dist/nginx-waf-${{ github.ref_name }}.sha256
             dist/nginx-waf-${{ github.ref_name }}.sha512
+
+  # -------------------------------------------------------------------
+  #  Un build rouge hors PR ne prevenait personne : version-watch reste vert
+  #  (il ne fait que dispatcher), et du 2026-09-10 au 09-30 tous les rebuilds
+  #  ont echoue en silence -- des correctifs de securite jamais publies.
+  #  Une seule issue par branche : ouverte au premier echec, commentee tant
+  #  que ca dure, fermee par le premier run vert. Pas sur pull_request : les
+  #  PR Dependabot n'ont qu'un jeton en lecture, et la PR montre deja le rouge.
+  # -------------------------------------------------------------------
+  notify:
+    name: Issue si echec
+    needs: [lint, resolve-versions, build, test, build-arm64, promote, update-readme, cleanup, release]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@v9
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const needs = JSON.parse(process.env.NEEDS);
+            const rouges = Object.entries(needs)
+              .filter(([, j]) => j.result === 'failure' || j.result === 'cancelled')
+              .map(([nom]) => nom);
+            const branche = context.ref.replace(/^refs\/(heads|tags)\//, '');
+            const titre = `[CI] build-push en echec sur ${branche}`;
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { data: ouvertes } = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', labels: 'ci-failure', per_page: 100 });
+            const issue = ouvertes.find(i => i.title === titre);
+            if (rouges.length) {
+              const corps = `Run \`${context.eventName}\` sur ${context.sha.slice(0, 7)} en echec `
+                + `(${rouges.join(', ')}) : ${run}`;
+              if (issue) {
+                await github.rest.issues.createComment({ ...context.repo, issue_number: issue.number, body: corps });
+              } else {
+                await github.rest.issues.create({ ...context.repo, title: titre, body: corps,
+                  labels: ['ci-failure', 'automated'] });
+              }
+            } else if (issue) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: issue.number,
+                body: `Repasse au vert : ${run}` });
+              await github.rest.issues.update({ ...context.repo, issue_number: issue.number, state: 'closed' });
+            }

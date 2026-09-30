@@ -1,4 +1,4 @@
-# image-manifest v2
+# image-manifest v3
 # image : nginx-waf-hardened
 # genere par scripts/image-manifest.py -- ne pas editer a la main
 
@@ -70,7 +70,7 @@ l usr/local/modsecurity/lib/libmodsecurity.so.3 -> libmodsecurity.so.3.<version>
 f 0755 0:0 elf usr/local/modsecurity/lib/libmodsecurity.so.3.<version>
 f 0755 0:0 elf usr/sbin/nginx
 
-count 239 etc/ssl/certs/
+present etc/ssl/certs/
 count 314 usr/local/owasp-modsecurity-crs/
 count 631 usr/share/
 count 20 var/

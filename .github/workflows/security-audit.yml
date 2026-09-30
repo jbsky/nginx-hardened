@@ -27,7 +27,34 @@ jobs:
     name: Audit nginx-waf-hardened
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth 0 : build-revision.sh compte les commits, un clone
+      # superficiel ferait de chaque image une .0
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Trivy ne voit dans cette image FROM scratch que ce qui garde une
+      # metadonnee de paquet (binaire Go d'init) : le service et ses
+      # bibliotheques C n'ont plus de base apk a lire. Un « 0 CVE » ne prouve
+      # donc rien sur elles. Ce qui les garde a jour, c'est la reconstruction --
+      # et du 2026-09-10 au 09-30 plus aucune n'aboutissait, en silence. Cette
+      # etape verifie que le tag que main doit produire existe dans le registre.
+      - name: main est publie
+        run: |
+          set -euo pipefail
+          # Meme resolution que le job resolve-versions de build-push : une
+          # stable nginx sortie mais jamais publiee echoue ici aussi.
+          VERSION=$(curl -fsSL https://nginx.org/en/download.html \
+            | grep -oP 'Stable version</h4>.*?Legacy' \
+            | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
+          REVISION=$(./scripts/build-revision.sh --unanchored -- Dockerfile conf/ errors/)
+          TAG="${VERSION}.${REVISION}"
+          if docker manifest inspect "${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.IMAGE_NAME }}:${TAG}" >/dev/null; then
+            echo "OK -- ${TAG} est publie"
+          else
+            echo "::error::main devrait publier ${{ env.IMAGE_NAME }}:${TAG}, absent du registre -- le dernier build-push de main a echoue ?"
+            exit 1
+          fi
 
       - name: Trivy full scan
         uses: aquasecurity/trivy-action@v0.36.0
