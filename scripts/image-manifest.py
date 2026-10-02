@@ -33,7 +33,7 @@ import subprocess
 import sys
 import tarfile
 
-VERSION = "image-manifest v2"
+VERSION = "image-manifest v3"
 
 # Repertoires dont chaque entree est listee nominativement, quel que soit son type.
 BIN_DIRS = ("bin/", "sbin/", "usr/bin/", "usr/sbin/", "usr/local/bin/", "usr/local/sbin/")
@@ -43,6 +43,15 @@ DUP_MIN_SIZE = 1024
 
 # Interdits absolus : echec meme si le manifeste les declare.
 FORBIDDEN = ("sbin/apk", "usr/bin/apk", "lib/apk/", "libapk.so")
+
+# Repertoires de DONNEES dont le volume suit un paquet de donnees, pas le code :
+# ca-certificates ajoute ou retire des autorites plusieurs fois par an. Leur
+# nombre exact a fait virer la porte au rouge sur toutes les PR Dependabot du
+# 2026-09-28, qui ne changeaient qu'un digest Alpine (239 -> 243 certificats) --
+# une derive que personne ne peut evaluer et qu'on finit par regenerer sans la
+# lire. On n'enregistre que le FAIT qu'ils ne sont pas vides : un bundle CA
+# disparu fait encore echouer la porte.
+PRESENCE = ("etc/ssl/certs/",)
 
 # Injecte par le daemon au `docker create`, pas par le build : ces entrees
 # appartiennent au CONTENEUR, pas a l'image. Les inventorier ferait echouer la
@@ -266,7 +275,10 @@ def rendre(image, entrees, doublons):
     if comptes:
         lignes.append("")
         for p in sorted(comptes):
-            lignes.append(f"count {comptes[p]} {p}")
+            if p in PRESENCE:
+                lignes.append(f"present {p}")
+            else:
+                lignes.append(f"count {comptes[p]} {p}")
 
     if doublons:
         lignes.append("")
