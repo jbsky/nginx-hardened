@@ -241,6 +241,25 @@ jobs:
           sarif_file: trivy-prep.sarif
           category: ${{ env.IMAGE_NAME }}-deps
 
+      # SBOM des paquets du stage prep, attestee sur l'image publiee (job
+      # promote). L'image finale FROM scratch n'a plus de base apk : c'est le
+      # seul moyen de re-auditer plus tard ce qui a ete publie (cve-watch.yml).
+      # prep est reconstruit ici a part du build final : la SBOM decrit la
+      # meme resolution apk a quelques minutes pres, pas au bit pres.
+      - name: SBOM of prep stage (CycloneDX)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}-prep:scan
+          format: cyclonedx
+          output: sbom-prep.cdx.json
+
+      - name: Upload prep SBOM
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom-prep
+          path: sbom-prep.cdx.json
+          if-no-files-found: error
+
       - name: Trivy gate prep stage (fail on fixable CRITICAL)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -578,6 +597,18 @@ jobs:
               cosign sign --yes "docker.io/${DOCKERHUB_NS}/${{ env.IMAGE_NAME }}@${DIGEST}"
           fi
 
+      - name: Download prep SBOM
+        uses: actions/download-artifact@v8
+        with:
+          name: sbom-prep
+
+      - name: Attest prep SBOM (CycloneDX)
+        env:
+          DIGEST: ${{ steps.manifest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign attest --yes --type cyclonedx --predicate sbom-prep.cdx.json \
+            "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${DIGEST}"
       - name: Trivy scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
