@@ -13,8 +13,13 @@ help:
 	@echo "  make scan    - Scan Trivy de l'image"
 	@echo "  make clean   - Supprime volumes + image"
 
+# Memes versions que la CI : sans build-arg, le Dockerfile resoudrait les
+# dernieres versions amont et l'image locale divergerait de celle publiee.
 build:
-	DOCKER_BUILDKIT=1 $(DC) build --pull
+	DOCKER_BUILDKIT=1 $(DC) build --pull \
+	  --build-arg NGINX_VER=$$(jq -r '.nginx' versions.json) \
+	  --build-arg MODSEC_VER=$$(jq -r '.modsecurity' versions.json) \
+	  --build-arg OWASP_CRS_VER=$$(jq -r '."owasp-crs"' versions.json)
 
 up:
 	$(DC) up -d

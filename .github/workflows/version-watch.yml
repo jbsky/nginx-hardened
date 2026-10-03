@@ -1,66 +1,44 @@
 # =====================================================================
-#  Version Watch — Detection automatique de nouvelles versions
+#  Version Watch — Nginx, ModSecurity et OWASP CRS
 #
-#  Routine quotidienne (06h00 UTC) :
-#    1. Interroge nginx.org + GitHub API pour les dernieres versions
-#    2. Compare avec les versions de la derniere image publiee
-#    3. Si mise a jour disponible → trigger rebuild + notification
+#  Quotidien 06h00 UTC :
+#    1. Interroge nginx.org + l'API GitHub pour les dernieres versions
+#    2. Compare avec versions.json
+#    3. Si une version a bouge : bump versions.json → commit → push,
+#       puis dispatch de build-push
 #
-#  Notifications :
-#    - GitHub Release (cree un tag automatique vX.Y.Z-autoN)
-#    - GitHub Discussion (si activee sur le repo)
-#    - Email via les notifications GitHub (cf. README)
+#  Ce workflow ne publie plus d'image. Jusqu'au 2026-10, il construisait et
+#  poussait lui-meme, sans que la version de ModSecurity ni de CRS entre dans
+#  le tag : nginx-waf-hardened:1.30.5.16 a ainsi porte trois images
+#  differentes. versions.json est un input du compteur de revision, donc
+#  chaque bump donne un nouveau tag immuable, et la publication passe par
+#  les portes de build-push (tests, manifeste, cloture).
 # =====================================================================
 name: version-watch
 
 on:
   schedule:
-    # Quotidien a 06h00 UTC
     - cron: '0 6 * * *'
   workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-  NAMESPACE: ${{ github.repository_owner }}
-  IMAGE_NAME: nginx-waf-hardened
-
 permissions:
   contents: write
-  packages: write
-  id-token: write
-  security-events: write
-  attestations: write
-  issues: write
+  actions: write
 
 jobs:
-  # -------------------------------------------------------------------
   check:
-    name: Check upstream versions
+    name: Check & bump upstream versions
     runs-on: ubuntu-latest
-    outputs:
-      rebuild: ${{ steps.check.outputs.rebuild }}
-      nginx_ver: ${{ steps.check.outputs.nginx_ver }}
-      modsec_ver: ${{ steps.check.outputs.modsec_ver }}
-      crs_ver: ${{ steps.check.outputs.crs_ver }}
-      changes: ${{ steps.check.outputs.changes }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Login ghcr.io (to inspect current image)
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Check versions
+      - name: Check upstream versions
         id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          # Fetch latest upstream versions
           NGINX_LATEST=$(curl -fsSL https://nginx.org/en/download.html \
             | grep -oP 'Stable version</h4>.*?Legacy' \
             | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
@@ -71,297 +49,71 @@ jobs:
             https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
             | jq -r '.tag_name' | sed 's/^v//')
 
-          echo "nginx_ver=${NGINX_LATEST}" >> "$GITHUB_OUTPUT"
-          echo "modsec_ver=${MODSEC_LATEST}" >> "$GITHUB_OUTPUT"
-          echo "crs_ver=${CRS_LATEST}" >> "$GITHUB_OUTPUT"
+          # Une page qui change de forme rendrait une chaine vide : on ne
+          # committe jamais une version qui n'en est pas une.
+          for v in "$NGINX_LATEST" "$MODSEC_LATEST" "$CRS_LATEST"; do
+            [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+              echo "::error::version amont illisible : '${v}'"; exit 1; }
+          done
+
+          CURRENT_NGINX=$(jq -r '.nginx' versions.json)
+          CURRENT_MODSEC=$(jq -r '.modsecurity' versions.json)
+          CURRENT_CRS=$(jq -r '."owasp-crs"' versions.json)
 
           echo "Upstream: nginx=${NGINX_LATEST} modsec=${MODSEC_LATEST} crs=${CRS_LATEST}"
+          echo "Pinned:   nginx=${CURRENT_NGINX} modsec=${CURRENT_MODSEC} crs=${CURRENT_CRS}"
 
-          # Try to read versions from current image labels
-          REBUILD=false
-          CHANGES=""
+          CHANGES=()
+          [ "$NGINX_LATEST" != "$CURRENT_NGINX" ] && CHANGES+=("nginx ${CURRENT_NGINX} → ${NGINX_LATEST}")
+          [ "$MODSEC_LATEST" != "$CURRENT_MODSEC" ] && CHANGES+=("modsecurity ${CURRENT_MODSEC} → ${MODSEC_LATEST}")
+          [ "$CRS_LATEST" != "$CURRENT_CRS" ] && CHANGES+=("owasp-crs ${CURRENT_CRS} → ${CRS_LATEST}")
 
-          IMAGE="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest"
-          if docker pull "$IMAGE" 2>/dev/null; then
-            CURRENT=$(docker inspect --format='{{index .Config.Labels "versions"}}' "$IMAGE" 2>/dev/null || echo "")
-            CURRENT_NGINX=$(echo "$CURRENT" | grep -oP 'nginx=\K[0-9.]+' || echo "none")
-            CURRENT_MODSEC=$(echo "$CURRENT" | grep -oP 'modsec=\K[0-9.]+' || echo "none")
-            CURRENT_CRS=$(echo "$CURRENT" | grep -oP 'crs=\K[0-9.]+' || echo "none")
-
-            echo "Current: nginx=${CURRENT_NGINX} modsec=${CURRENT_MODSEC} crs=${CURRENT_CRS}"
-
-            if [ "$NGINX_LATEST" != "$CURRENT_NGINX" ]; then
-              REBUILD=true
-              CHANGES="${CHANGES}Nginx: ${CURRENT_NGINX} → ${NGINX_LATEST}\n"
-            fi
-            if [ "$MODSEC_LATEST" != "$CURRENT_MODSEC" ]; then
-              REBUILD=true
-              CHANGES="${CHANGES}ModSecurity: ${CURRENT_MODSEC} → ${MODSEC_LATEST}\n"
-            fi
-            if [ "$CRS_LATEST" != "$CURRENT_CRS" ]; then
-              REBUILD=true
-              CHANGES="${CHANGES}OWASP CRS: ${CURRENT_CRS} → ${CRS_LATEST}\n"
-            fi
-          else
-            echo "No current image found, rebuild needed"
-            REBUILD=true
-            CHANGES="Initial build: nginx=${NGINX_LATEST} modsec=${MODSEC_LATEST} crs=${CRS_LATEST}"
+          if [ "${#CHANGES[@]}" -eq 0 ]; then
+            echo "Already up to date"
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          echo "rebuild=${REBUILD}" >> "$GITHUB_OUTPUT"
-          echo "changes=${CHANGES}" >> "$GITHUB_OUTPUT"
-          echo "Rebuild needed: ${REBUILD}"
-
-  # -------------------------------------------------------------------
-  rebuild:
-    name: Rebuild image
-    needs: check
-    if: needs.check.outputs.rebuild == 'true'
-    runs-on: ubuntu-latest
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-      tag: ${{ steps.tag.outputs.tag }}
-    steps:
-      # fetch-depth 0: build-revision.sh counts commits, a shallow clone
-      # would silently make every image .0
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Compute auto-release tag
-        id: tag
-        run: |
-          # Format: auto-YYYYMMDD.N (N = run number for uniqueness)
-          TAG="auto-$(date +%Y%m%d).${GITHUB_RUN_NUMBER}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Login ghcr.io
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # version-watch's own rebuild only ever pushed to ghcr.io — Docker Hub
-      # was silently left stale on every auto-update (build-push.yml is the
-      # only workflow that pushes to both). Mirror its dual-registry pattern.
-      - name: Check Docker Hub credentials
-        id: dockerhub
-        run: |
-          if [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Login Docker Hub
-        if: steps.dockerhub.outputs.available == 'true'
-        uses: docker/login-action@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Compute Docker Hub image name
-        id: dockerhub-image
-        if: steps.dockerhub.outputs.available == 'true'
-        env:
-          DOCKERHUB_NS: ${{ secrets.DOCKERHUB_USERNAME }}
-        run: echo "image=docker.io/${DOCKERHUB_NS}/${{ env.IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
-
-      - name: Compute build revision
-        id: revision
-        env:
-          NGINX_VER: ${{ needs.check.outputs.nginx_ver }}
-        run: |
-          set -euo pipefail
-          REVISION=$(./scripts/build-revision.sh --unanchored -- Dockerfile conf/ errors/)
-          echo "tag=${NGINX_VER}.${REVISION}" >> "$GITHUB_OUTPUT"
-          echo "- Build revision: ${NGINX_VER}.${REVISION}" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Compute tags
-        id: tags
-        env:
-          DOCKERHUB_IMAGE: ${{ steps.dockerhub-image.outputs.image }}
-          NGINX_VER: ${{ needs.check.outputs.nginx_ver }}
-          AUTO_TAG: ${{ steps.tag.outputs.tag }}
-          REVISION_TAG: ${{ steps.revision.outputs.tag }}
-        run: |
-          TAGS="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
-          ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${NGINX_VER}
-          ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${AUTO_TAG}
-          ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${REVISION_TAG}"
-          if [ -n "$DOCKERHUB_IMAGE" ]; then
-            TAGS="${TAGS}
-          ${DOCKERHUB_IMAGE}:latest
-          ${DOCKERHUB_IMAGE}:${NGINX_VER}
-          ${DOCKERHUB_IMAGE}:${AUTO_TAG}
-          ${DOCKERHUB_IMAGE}:${REVISION_TAG}"
-          fi
+          SUMMARY=$(printf '%s, ' "${CHANGES[@]}")
           {
-            echo "tags<<EOF"
-            echo "$TAGS"
-            echo "EOF"
+            echo "updated=true"
+            echo "nginx=${NGINX_LATEST}"
+            echo "modsec=${MODSEC_LATEST}"
+            echo "crs=${CRS_LATEST}"
+            echo "summary=${SUMMARY%, }"
           } >> "$GITHUB_OUTPUT"
+          printf -- '- %s\n' "${CHANGES[@]}" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build & Push
-        id: build
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          sbom: true
-          provenance: mode=max
-          build-args: |
-            NGINX_VER=${{ needs.check.outputs.nginx_ver }}
-            MODSEC_VER=${{ needs.check.outputs.modsec_ver }}
-            OWASP_CRS_VER=${{ needs.check.outputs.crs_ver }}
-          tags: ${{ steps.tags.outputs.tags }}
-          labels: |
-            versions=nginx=${{ needs.check.outputs.nginx_ver }} modsec=${{ needs.check.outputs.modsec_ver }} crs=${{ needs.check.outputs.crs_ver }}
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          cache-from: type=gha,scope=nginx-waf
-          cache-to: type=gha,mode=max,scope=nginx-waf
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-
-      - name: Sign image
+      - name: Bump versions.json
+        if: steps.check.outputs.updated == 'true'
         env:
-          HAS_DOCKERHUB: ${{ steps.dockerhub.outputs.available }}
-          DOCKERHUB_IMAGE: ${{ steps.dockerhub-image.outputs.image }}
-        run: |
-          cosign sign --yes \
-            "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
-          if [ "$HAS_DOCKERHUB" = "true" ]; then
-            COSIGN_REPOSITORY="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}" \
-              cosign sign --yes "${DOCKERHUB_IMAGE}@${{ steps.build.outputs.digest }}"
-          fi
-
-      - name: Trivy scan
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
-          format: sarif
-          output: trivy-nginx.sarif
-          severity: CRITICAL,HIGH
-          exit-code: '0'
-          ignore-unfixed: true
-
-      - name: Upload SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy-nginx.sarif
-          category: version-watch
-
-      # version-watch publie l'image lui-meme -- build-push.yml n'est pas dans
-      # la boucle -- donc il doit aussi rendre le README, sinon un bump
-      # automatique livre une nouvelle version de nginx pendant que la doc
-      # continue de nommer la precedente. Meme reflexe que le correctif
-      # dual-registry plus haut : tout chemin de publication est un chemin de
-      # publication, y compris un cron de veille de version.
-      - name: Refresh README
-        env:
-          NGINX_VER: ${{ needs.check.outputs.nginx_ver }}
-          REVISION_TAG: ${{ steps.revision.outputs.tag }}
+          NGINX: ${{ steps.check.outputs.nginx }}
+          MODSEC: ${{ steps.check.outputs.modsec }}
+          CRS: ${{ steps.check.outputs.crs }}
         run: |
           set -euo pipefail
-          SPEC="jbsky/nginx-waf-hardened=${NGINX_VER}=${REVISION_TAG}"
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          for attempt in 1 2 3; do
-            ./scripts/update-readme-tags.sh "$SPEC"
-            # `git diff --quiet && exit 0` would abort the step under `set -e`
-            # on the branch where there IS a change: use an explicit if.
-            if git diff --quiet README.md; then
-              echo "README already names the current tag"
-              exit 0
-            fi
-            git add README.md
-            git commit -m "docs(readme): tag immuable courant [skip ci]"
-            if git push; then
-              exit 0
-            fi
-            echo "push rejete (publish concurrent) -- on repart de origin/main"
-            git fetch origin main
-            git reset --hard origin/main
-          done
-          echo "::error::README: 3 tentatives perdues face a des publish concurrents"
-          exit 1
+          jq --arg n "$NGINX" --arg m "$MODSEC" --arg c "$CRS" \
+            '.nginx = $n | .modsecurity = $m | ."owasp-crs" = $c' \
+            versions.json > versions.json.tmp
+          mv versions.json.tmp versions.json
+          cat versions.json
 
-  # -------------------------------------------------------------------
-  cleanup:
-    name: Prune old registry tags
-    needs: rebuild
-    uses: ./.github/workflows/registry-cleanup.yml
-    secrets: inherit
-
-  # -------------------------------------------------------------------
-  notify:
-    name: Notify new image
-    needs: [check, rebuild]
-    if: needs.check.outputs.rebuild == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      issues: write
-    steps:
-      - uses: actions/checkout@v7
-
-      # Creating the tag via `git push` goes through git's pre-receive hook,
-      # which refuses any GITHUB_TOKEN-authored push whose ref is brand new
-      # and whose tree contains .github/workflows/* (even unchanged content
-      # already on main) unless the token has `workflows` permission — a
-      # permission GITHUB_TOKEN can never be granted. action-gh-release
-      # creates the tag itself via the Releases REST API instead, a
-      # separate code path that only needs `contents: write` as long as the
-      # tag targets the current branch tip (not an older commit).
-      - name: Create GitHub Release (notification trigger)
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ needs.rebuild.outputs.tag }}
-          name: "Auto-update: Nginx ${{ needs.check.outputs.nginx_ver }} + ModSec ${{ needs.check.outputs.modsec_ver }}"
-          body: |
-            ## Automatic rebuild triggered by upstream version change
-
-            ### Updated components
-            ${{ needs.check.outputs.changes }}
-
-            ### Versions in this image
-            | Component | Version |
-            |-----------|---------|
-            | Nginx | ${{ needs.check.outputs.nginx_ver }} |
-            | ModSecurity | ${{ needs.check.outputs.modsec_ver }} |
-            | OWASP CRS | ${{ needs.check.outputs.crs_ver }} |
-
-            ### Pull
-            ```bash
-            docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
-            # or pinned:
-            docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.check.outputs.nginx_ver }}
-            ```
-
-            ### Verify signature
-            ```bash
-            cosign verify ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest \
-              --certificate-identity-regexp '^https://github.com/${{ github.repository }}/' \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com
-            ```
-          generate_release_notes: false
-          prerelease: true
-
-      - name: Summary
+      - name: Commit & push
+        if: steps.check.outputs.updated == 'true'
+        env:
+          SUMMARY: ${{ steps.check.outputs.summary }}
         run: |
-          echo "### New image published!" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Tag:** \`${{ needs.rebuild.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Nginx:** ${{ needs.check.outputs.nginx_ver }}" >> $GITHUB_STEP_SUMMARY
-          echo "**ModSecurity:** ${{ needs.check.outputs.modsec_ver }}" >> $GITHUB_STEP_SUMMARY
-          echo "**OWASP CRS:** ${{ needs.check.outputs.crs_ver }}" >> $GITHUB_STEP_SUMMARY
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add versions.json
+          git commit -m "chore(deps): bump ${SUMMARY}"
+          git push
+
+      - name: Trigger build-push
+        if: steps.check.outputs.updated == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A push made with GITHUB_TOKEN does not trigger `on: push` workflows
+          # (anti-recursion protection). Explicitly dispatch build-push instead.
+          gh workflow run build-push.yml --ref main
