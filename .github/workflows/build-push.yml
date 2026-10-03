@@ -47,6 +47,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # versions.json, seule source des versions du build : controle du depot
+      # et test unitaire du controle (copie locale, celle de `make build`).
+      - name: versions.json, seule source
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_versions_build_args.py' -v
+          ./scripts/versions-build-args.py --check
+
       - name: Hadolint
         uses: hadolint/hadolint-action@v3.4.0
         with:
@@ -149,6 +156,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Build-args generes depuis versions.json (le controle tourne avec) :
+      # chaque docker/build-push-action du job doit les recevoir.
+      - name: Build-args depuis versions.json
+        id: build-args
+        uses: jbsky/hardened-ci/versions@f0388550f4514edb6352b3191206c5220efaa0ae # v0.5.0
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -184,10 +197,7 @@ jobs:
           tags: ${{ env.PUBLISH != 'true' && steps.compose-image.outputs.tag || '' }}
           sbom: ${{ env.PUBLISH }}
           provenance: ${{ env.PUBLISH == 'true' && 'mode=max' || 'false' }}
-          build-args: |
-            NGINX_VER=${{ needs.resolve-versions.outputs.nginx }}
-            MODSEC_VER=${{ needs.resolve-versions.outputs.modsec }}
-            OWASP_CRS_VER=${{ needs.resolve-versions.outputs.crs }}
+          build-args: ${{ steps.build-args.outputs.build-args }}
           cache-from: type=gha,scope=nginx-waf-linux/amd64
           cache-to: type=gha,mode=max,scope=nginx-waf-linux/amd64
           # Le stage `prep` porte les paquets Alpine qui finissent dans
@@ -219,10 +229,7 @@ jobs:
           load: true
           tags: ${{ env.IMAGE_NAME }}-prep:scan
           no-cache-filters: prep
-          build-args: |
-            NGINX_VER=${{ needs.resolve-versions.outputs.nginx }}
-            MODSEC_VER=${{ needs.resolve-versions.outputs.modsec }}
-            OWASP_CRS_VER=${{ needs.resolve-versions.outputs.crs }}
+          build-args: ${{ steps.build-args.outputs.build-args }}
           cache-from: type=gha,scope=nginx-waf-linux/amd64
 
       - name: Trivy scan prep stage (report CRITICAL+HIGH)
@@ -409,6 +416,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Build-args generes depuis versions.json (le controle tourne avec) :
+      # chaque docker/build-push-action du job doit les recevoir.
+      - name: Build-args depuis versions.json
+        id: build-args
+        uses: jbsky/hardened-ci/versions@f0388550f4514edb6352b3191206c5220efaa0ae # v0.5.0
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
         with:
@@ -432,10 +445,7 @@ jobs:
           platforms: linux/arm64
           sbom: true
           provenance: mode=max
-          build-args: |
-            NGINX_VER=${{ needs.resolve-versions.outputs.nginx }}
-            MODSEC_VER=${{ needs.resolve-versions.outputs.modsec }}
-            OWASP_CRS_VER=${{ needs.resolve-versions.outputs.crs }}
+          build-args: ${{ steps.build-args.outputs.build-args }}
           outputs: type=image,"name=${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}",push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=nginx-waf-linux/arm64
           cache-to: type=gha,mode=max,scope=nginx-waf-linux/arm64

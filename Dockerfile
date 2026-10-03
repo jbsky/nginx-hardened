@@ -8,50 +8,35 @@
 #   - entrypoint + healthcheck en binaire Go statique
 #   - tini-static PID 1
 #
-#  Auto-versioning: si NGINX_VER/MODSEC_VER/OWASP_CRS_VER ne sont pas
-#  fournis en build-arg, le fetcher interroge les APIs upstream.
+#  Versions : versions.json est la seule source. NGINX_VERSION,
+#  MODSECURITY_VERSION et OWASP_CRS_VERSION n'ont aucune valeur par defaut ;
+#  la CI et `make build` les passent via scripts/versions-build-args.py.
+#  (Jusqu'au 2026-10-03, un ARG vide faisait resoudre la derniere version
+#  amont au build : un build local divergeait en silence de l'image publiee.)
 #
 #  Proxy-aware: passe http_proxy/https_proxy via les predefined ARGs
 #  BuildKit (non baked dans l'image finale).
 # =====================================================================
 
 # ---------------------------------------------------------------------------
-# Stage 0: fetcher — resout les dernieres versions stables
+# Stage 0: fetcher — fige les versions passees en build-args
 # ---------------------------------------------------------------------------
 FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS fetcher
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
-# Trust homelab CA if provided (for builds behind SSL-bumping proxy)
-RUN --mount=type=secret,id=ca-certs,target=/tmp/ca-bundle.crt,required=false \
-    if [ -f /tmp/ca-bundle.crt ]; then \
-      cat /tmp/ca-bundle.crt >> /etc/ssl/certs/ca-certificates.crt; \
-    fi
+ARG NGINX_VERSION
+ARG MODSECURITY_VERSION
+ARG OWASP_CRS_VERSION
 
-RUN apk add --no-cache curl jq grep
-
-ARG NGINX_VER=""
-ARG MODSEC_VER=""
-ARG OWASP_CRS_VER=""
-
-RUN set -eux; \
-    if [ -z "$NGINX_VER" ]; then \
-      NGINX_VER=$(curl -fsSL https://nginx.org/en/download.html \
-        | grep -oP 'Stable version</h4>.*?Legacy' \
-        | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p'); \
-    fi; \
-    echo "$NGINX_VER" > /tmp/NGINX_VER; \
-    if [ -z "$MODSEC_VER" ]; then \
-      MODSEC_VER=$(curl -fsSL https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
-        | jq -r '.tag_name' | sed 's/^v//'); \
-    fi; \
-    echo "$MODSEC_VER" > /tmp/MODSEC_VER; \
-    if [ -z "$OWASP_CRS_VER" ]; then \
-      OWASP_CRS_VER=$(curl -fsSL https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
-        | jq -r '.tag_name' | sed 's/^v//'); \
-    fi; \
-    echo "$OWASP_CRS_VER" > /tmp/OWASP_CRS_VER; \
-    echo "=== Resolved: Nginx=$NGINX_VER ModSec=$MODSEC_VER CRS=$OWASP_CRS_VER ==="
+# Echouer tout de suite plutot que construire une version inconnue : plus de
+# resolution amont ici, versions.json fait autorite.
+RUN test -n "${NGINX_VERSION}" -a -n "${MODSECURITY_VERSION}" -a -n "${OWASP_CRS_VERSION}" \
+    || { echo "build-args requis depuis versions.json : make build, ou docker build \$(scripts/versions-build-args.py --docker) ." >&2; exit 1; } \
+ && echo "${NGINX_VERSION}" > /tmp/NGINX_VER \
+ && echo "${MODSECURITY_VERSION}" > /tmp/MODSEC_VER \
+ && echo "${OWASP_CRS_VERSION}" > /tmp/OWASP_CRS_VER \
+ && echo "=== Versions (versions.json) : Nginx=${NGINX_VERSION} ModSec=${MODSECURITY_VERSION} CRS=${OWASP_CRS_VERSION} ==="
 
 # ---------------------------------------------------------------------------
 # Stage 1: builder — compile tout from source

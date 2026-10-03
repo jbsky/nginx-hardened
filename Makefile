@@ -13,13 +13,13 @@ help:
 	@echo "  make scan    - Scan Trivy de l'image"
 	@echo "  make clean   - Supprime volumes + image"
 
-# Memes versions que la CI : sans build-arg, le Dockerfile resoudrait les
-# dernieres versions amont et l'image locale divergerait de celle publiee.
+# Memes versions que la CI, par le meme generateur : le Dockerfile n'a aucune
+# valeur par defaut et echoue au garde sans build-arg. Un echec du generateur
+# arrete la recette (pas de $(shell ...), qui l'avalerait).
 build:
-	DOCKER_BUILDKIT=1 $(DC) build --pull \
-	  --build-arg NGINX_VER=$$(jq -r '.nginx' versions.json) \
-	  --build-arg MODSEC_VER=$$(jq -r '.modsecurity' versions.json) \
-	  --build-arg OWASP_CRS_VER=$$(jq -r '."owasp-crs"' versions.json)
+	@args=$$(./scripts/versions-build-args.py --docker) \
+	  && echo "Build depuis versions.json : $$args" \
+	  && DOCKER_BUILDKIT=1 $(DC) build --pull $$args
 
 up:
 	$(DC) up -d

@@ -67,15 +67,13 @@ meme digest.
 Les versions Nginx, ModSecurity et OWASP CRS sont epinglees dans `versions.json`,
 que `version-watch` met a jour chaque jour (commit puis publication par
 `build-push`) : un tag `<version>.<revision>` designe toujours la meme image.
-`make build` passe ces versions au build ; sans build-arg, le Dockerfile
-resoudrait les dernieres versions amont. Pour forcer une version :
+`make build` passe ces versions au build, par le meme generateur que la CI
+(`scripts/versions-build-args.py`) ; le Dockerfile n'a aucune valeur par defaut
+et un build sans build-arg echoue au garde. Pour essayer une autre version :
+la changer dans `versions.json`, jamais en ligne de commande.
 
 ```bash
-docker build \
-  --build-arg NGINX_VER=<version> \
-  --build-arg MODSEC_VER=<version> \
-  --build-arg OWASP_CRS_VER=<version> \
-  .
+docker build $(scripts/versions-build-args.py --docker) .
 ```
 
 Les trois versions sont volontairement absentes de ce README. Seule celle de

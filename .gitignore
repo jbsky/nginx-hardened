@@ -21,3 +21,4 @@ Thumbs.db
 # Docker
 docker-compose.override.yml
 nginx-init
+__pycache__/
