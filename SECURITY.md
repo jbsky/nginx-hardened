@@ -14,8 +14,9 @@ comes up.
 
 ## Recurring pattern: nginx patch bumps re-trip these CVEs
 
-The Dockerfile fetches nginx via `NGINX_VER=""` (auto-detects latest stable at build
-time), so the shipped nginx patch version drifts forward on its own. Since
+`version-watch.yml` bumps the nginx version pinned in `versions.json` as soon as a new
+stable patch ships (until 2026-10 the build resolved it upstream itself), so the shipped
+nginx patch version moves forward on its own. Since
 `.grype.yaml` pins exceptions to an exact `version:`, every new nginx patch release
 makes the existing suppression inert and the weekly audit fails again with the *same*
 CVEs against the *new* version number -- this is by design, not a regression: it forces

@@ -71,9 +71,9 @@ f 0755 0:0 elf usr/local/modsecurity/lib/libmodsecurity.so.3.<version>
 f 0755 0:0 elf usr/sbin/nginx
 
 present etc/ssl/certs/
-count 314 usr/local/owasp-modsecurity-crs/
+count 297 usr/local/owasp-modsecurity-crs/
 count 631 usr/share/
 count 20 var/
 
 dup 2 12411 etc/ssl/openssl.cnf etc/ssl/openssl.cnf.dist
-dup 2 38807 usr/local/owasp-modsecurity-crs/crs-setup.conf usr/local/owasp-modsecurity-crs/crs-setup.conf.example
+dup 2 40319 usr/local/owasp-modsecurity-crs/crs-setup.conf usr/local/owasp-modsecurity-crs/crs-setup.conf.example

@@ -11,7 +11,7 @@ Image Docker Nginx compilee from source, hardenee (FROM scratch, Go init, tini P
 | Module | Fonction |
 |--------|----------|
 | ModSecurity v3 | WAF en mode blocking |
-| OWASP Core Rule Set | Regles de securite WAF (auto-updated) |
+| OWASP Core Rule Set | Regles de securite WAF (suivi quotidien par version-watch) |
 | GeoIP2 | Blocage geographique (db-ip free) |
 | VTS | Monitoring trafic (`/vts-status`) |
 | headers-more | Controle complet des headers HTTP |
@@ -64,8 +64,11 @@ meme digest.
 
 ## Auto-versioning
 
-Les versions Nginx, ModSecurity et OWASP CRS sont resolues automatiquement au build time.
-Pour forcer une version :
+Les versions Nginx, ModSecurity et OWASP CRS sont epinglees dans `versions.json`,
+que `version-watch` met a jour chaque jour (commit puis publication par
+`build-push`) : un tag `<version>.<revision>` designe toujours la meme image.
+`make build` passe ces versions au build ; sans build-arg, le Dockerfile
+resoudrait les dernieres versions amont. Pour forcer une version :
 
 ```bash
 docker build \
@@ -135,7 +138,7 @@ Dual pipeline (GitLab + GitHub Actions) :
 | sign | cosign keyless OIDC |
 | scan | Trivy SARIF |
 | attest | SBOM + SLSA provenance (level 2) |
-| version-watch | Cron quotidien — rebuild auto sur nouvelle version Nginx/CRS |
+| version-watch | Cron quotidien — bump de `versions.json` (Nginx, ModSecurity, CRS), publication par build-push |
 | security-audit | Cron hebdomadaire — scan vulnerabilites sur images publiees |
 
 ## Monitoring

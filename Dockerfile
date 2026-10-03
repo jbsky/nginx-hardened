@@ -257,6 +257,7 @@ SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
 # 1/2  Core runtime libs
 RUN sed -i 's|https://|http://|g' /etc/apk/repositories \
+ && apk upgrade --no-cache \
  && apk add --no-cache \
         ca-certificates libcurl libgcc libmaxminddb libstdc++ \
         libxml2 lmdb openssl pcre2 tzdata yajl zlib \

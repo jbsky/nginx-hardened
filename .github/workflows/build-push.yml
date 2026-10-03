@@ -18,6 +18,8 @@ on:
       - 'init.go'
       - 'init_test.go'
       - 'go.mod'
+      - 'keys/**'
+      - 'versions.json'
       - 'scripts/**'
       - 'image.manifest'
       - '.github/workflows/build-push.yml'
@@ -86,12 +88,11 @@ jobs:
         run: go test ./...
 
   # -------------------------------------------------------------------
-  #  Resolve upstream versions ONCE, shared by amd64 (test) and arm64
-  #  (build-arm64) builds -- otherwise two separate scrapes could race
-  #  against an upstream release and build genuinely mismatched arches.
+  #  Read the pinned versions ONCE, shared by amd64 (test) and arm64
+  #  (build-arm64) builds.
   # -------------------------------------------------------------------
   resolve-versions:
-    name: Resolve upstream versions
+    name: Read pinned versions
     needs: lint
     runs-on: ubuntu-latest
     outputs:
@@ -99,20 +100,22 @@ jobs:
       modsec: ${{ steps.versions.outputs.modsec }}
       crs: ${{ steps.versions.outputs.crs }}
     steps:
+      - uses: actions/checkout@v7
+
+      # Les versions sont epinglees dans versions.json, input du compteur de
+      # revision : une image = un commit. Les resoudre ici a l'amont faisait
+      # changer le contenu sous un tag deja publie (ModSecurity 3.0.17 republie
+      # sous 1.30.5.16 le 2026-09-30). version-watch fait les bumps.
       - id: versions
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          NGINX_VER=$(curl -fsSL https://nginx.org/en/download.html \
-            | grep -oP 'Stable version</h4>.*?Legacy' \
-            | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
-          MODSEC_VER=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
-            https://api.github.com/repos/owasp-modsecurity/ModSecurity/releases/latest \
-            | jq -r '.tag_name' | sed 's/^v//')
-          CRS_VER=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
-            https://api.github.com/repos/coreruleset/coreruleset/releases/latest \
-            | jq -r '.tag_name' | sed 's/^v//')
+          NGINX_VER=$(jq -r '.nginx' versions.json)
+          MODSEC_VER=$(jq -r '.modsecurity' versions.json)
+          CRS_VER=$(jq -r '."owasp-crs"' versions.json)
+          for v in "$NGINX_VER" "$MODSEC_VER" "$CRS_VER"; do
+            [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+              echo "::error::versions.json : version non epinglee ($v)"; exit 1; }
+          done
           echo "nginx=${NGINX_VER}" >> "$GITHUB_OUTPUT"
           echo "modsec=${MODSEC_VER}" >> "$GITHUB_OUTPUT"
           echo "crs=${CRS_VER}" >> "$GITHUB_OUTPUT"
@@ -423,23 +426,73 @@ jobs:
           no-cache-filters: prep
 
   # -------------------------------------------------------------------
-  #  Merges build's tested amd64 digest with build-arm64's digest into the
-  #  final multi-arch manifest -- no rebuild of either.
+  #  Un tag <version>.<revision> est immuable : le routeur et les manifestes
+  #  l'epinglent. Le compteur ne compte que les commits sur les inputs de
+  #  l'image ; un build declenche par autre chose (test, workflow, relance
+  #  manuelle) retombe sur une revision deja publiee et la reecrirait --
+  #  arrive 3 fois a nginx-waf-hardened:1.30.5.16. Tag deja present : pas
+  #  de promotion, run vert, latest ne bouge pas. Toute autre reponse du
+  #  registre que 200/404 fait echouer : ne jamais reecrire par defaut.
   # -------------------------------------------------------------------
-  promote:
-    name: Promote tested digests
-    needs: [build, test, build-arm64, resolve-versions]
-    runs-on: ubuntu-latest
+  revision:
+    name: Immutable tag guard
+    needs: [resolve-versions]
     if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
     outputs:
-      digest: ${{ steps.manifest.outputs.digest }}
-
+      tag: ${{ steps.revision.outputs.tag }}
+      published: ${{ steps.published.outputs.published }}
     steps:
       # fetch-depth 0: build-revision.sh counts commits, a shallow clone
       # would silently make every build .0
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Compute build revision
+        id: revision
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.resolve-versions.outputs.nginx }}"
+          REVISION=$(./scripts/build-revision.sh --unanchored -- Dockerfile conf/ errors/ init.go go.mod keys/ versions.json)
+          echo "tag=${VERSION}.${REVISION}" >> "$GITHUB_OUTPUT"
+
+      - name: Is this tag already published?
+        id: published
+        env:
+          REPO: ${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}
+          TAG: ${{ steps.revision.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -fsS "https://${REGISTRY}/token?scope=repository:${REPO}:pull" | jq -r .token)
+          CODE=$(curl -sS -o /dev/null -w '%{http_code}' -I \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://${REGISTRY}/v2/${REPO}/manifests/${TAG}")
+          case "$CODE" in
+            200) PUBLISHED=true
+                 echo "- \`${TAG}\` est deja publie : pas de promotion (aucun input de l'image n'a change)" >> "$GITHUB_STEP_SUMMARY" ;;
+            404) PUBLISHED=false
+                 echo "- \`${TAG}\` : nouvelle revision, promotion" >> "$GITHUB_STEP_SUMMARY" ;;
+            *)   echo "::error::${REGISTRY} a repondu ${CODE} pour ${REPO}:${TAG}"; exit 1 ;;
+          esac
+          echo "published=${PUBLISHED}" >> "$GITHUB_OUTPUT"
+
+  # -------------------------------------------------------------------
+  #  Merges build's tested amd64 digest with build-arm64's digest into the
+  #  final multi-arch manifest -- no rebuild of either.
+  # -------------------------------------------------------------------
+  promote:
+    name: Promote tested digests
+    needs: [build, test, build-arm64, resolve-versions, revision]
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && needs.revision.outputs.published == 'false'
+    outputs:
+      digest: ${{ steps.manifest.outputs.digest }}
+
+    steps:
+      # La revision vient du job revision : plus besoin de l'historique ici.
+      - uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -478,10 +531,9 @@ jobs:
         id: revision
         run: |
           set -euo pipefail
-          VERSION="${{ needs.resolve-versions.outputs.nginx }}"
-          REVISION=$(./scripts/build-revision.sh --unanchored -- Dockerfile conf/ errors/)
-          echo "tag=${VERSION}.${REVISION}" >> "$GITHUB_OUTPUT"
-          echo "- Build revision: ${VERSION}.${REVISION}" >> "$GITHUB_STEP_SUMMARY"
+          TAG="${{ needs.revision.outputs.tag }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "- Build revision: ${TAG}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Extract metadata
         id: meta
@@ -591,7 +643,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.resolve-versions.outputs.nginx }}"
-          REVISION=$(./scripts/build-revision.sh --unanchored -- Dockerfile conf/ errors/)
+          REVISION=$(./scripts/build-revision.sh --unanchored -- Dockerfile conf/ errors/ init.go go.mod keys/ versions.json)
           ./scripts/update-readme-tags.sh "jbsky/nginx-waf-hardened=${VERSION}=${VERSION}.${REVISION}"
 
       - name: Commit if changed
@@ -626,8 +678,13 @@ jobs:
   # -------------------------------------------------------------------
   release:
     name: GitHub Release
-    needs: promote
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [revision, promote]
+    # Un tag git pose sur un commit deja publie ne repromeut rien (garde
+    # revision) : la release se fait quand meme.
+    if: >-
+      always() && startsWith(github.ref, 'refs/tags/v')
+      && needs.revision.result == 'success'
+      && (needs.promote.result == 'success' || needs.revision.outputs.published == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -666,7 +723,7 @@ jobs:
   # -------------------------------------------------------------------
   notify:
     name: Issue si echec
-    needs: [lint, resolve-versions, build, test, build-arm64, promote, update-readme, cleanup, release]
+    needs: [lint, resolve-versions, build, test, build-arm64, revision, promote, update-readme, cleanup, release]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
