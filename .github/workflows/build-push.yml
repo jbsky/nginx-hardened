@@ -54,6 +54,18 @@ jobs:
           python3 -m unittest discover -s scripts -p 'test_versions_build_args.py' -v
           ./scripts/versions-build-args.py --check
 
+      # La copie locale (celle de `make build` et de l'etape ci-dessus) doit etre
+      # la version de hardened-ci epinglee par l'action : quand Dependabot bumpe
+      # le SHA, ce lint echoue tant que la copie n'a pas suivi.
+      - name: Copie locale du controle = hardened-ci epingle
+        run: |
+          set -euo pipefail
+          ref=$(grep -m1 -oP 'jbsky/hardened-ci/versions@\K[0-9a-f]{40}' .github/workflows/build-push.yml)
+          for f in versions-build-args.py test_versions_build_args.py; do
+            curl -fsSL "https://raw.githubusercontent.com/jbsky/hardened-ci/${ref}/scripts/${f}" | cmp - "scripts/${f}" \
+              || { echo "::error::scripts/${f} differe de jbsky/hardened-ci@${ref} : la recopier depuis hardened-ci"; exit 1; }
+          done
+
       - name: Hadolint
         uses: hadolint/hadolint-action@v3.4.0
         with:
@@ -160,7 +172,7 @@ jobs:
       # chaque docker/build-push-action du job doit les recevoir.
       - name: Build-args depuis versions.json
         id: build-args
-        uses: jbsky/hardened-ci/versions@f0388550f4514edb6352b3191206c5220efaa0ae # v0.5.0
+        uses: jbsky/hardened-ci/versions@28bf7b0bb40bd7f8e2eaae64534b053e1976bae0 # v0.7.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -420,7 +432,7 @@ jobs:
       # chaque docker/build-push-action du job doit les recevoir.
       - name: Build-args depuis versions.json
         id: build-args
-        uses: jbsky/hardened-ci/versions@f0388550f4514edb6352b3191206c5220efaa0ae # v0.5.0
+        uses: jbsky/hardened-ci/versions@28bf7b0bb40bd7f8e2eaae64534b053e1976bae0 # v0.7.0
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4

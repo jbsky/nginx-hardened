@@ -130,6 +130,12 @@ class CheckTest(unittest.TestCase):
         self.repo.edit("Dockerfile", "    TCC_COMMIT\n", "    TCC_COMMIT=abc123\n")
         self.assertCaught("ARG TCC_COMMIT=abc123 -- valeur par defaut interdite")
 
+    def test_suffixe_tag_reconnu(self):
+        # Cas bind9 : ARG JSONC_TAG=json-c-0.19-20260627, version ecrite en dur.
+        self.repo.edit("Dockerfile", "ARG OISF_FPR", "ARG JSONC_TAG=json-c-0.19-20260627\nARG OISF_FPR")
+        self.assertCaught("ARG JSONC_TAG=json-c-0.19-20260627 -- valeur par defaut interdite")
+        self.assertCaught("ARG JSONC_TAG sans cle dans versions.json")
+
     def test_suffixe_ver_vide_reconnu(self):
         # Cas nginx : ARG NGINX_VER="" et resolution amont quand il est vide.
         self.repo.edit("Dockerfile", "ARG OISF_FPR", 'ARG NGINX_VER=""\nARG OISF_FPR')
@@ -212,6 +218,25 @@ class CheckTest(unittest.TestCase):
                        "          target: prep\n          build-args: |\n            APP_VERSION=1.2.3\n")
         self.assertCaught("etape « Build prep stage » : build-args ne vient pas de versions-build-args.py")
 
+    def test_matrice_avant_les_steps(self):
+        # Une strategy.matrix (liste de `- name:`) avant `steps:` ne doit pas
+        # masquer les vraies etapes du job.
+        self.repo.write(".github/workflows/build-push.yml", WORKFLOW + """  build-arm64:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image:
+          - name: app
+            context: app/
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build arm64
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.image.context }}
+""")
+        self.assertCaught("job build-arm64, etape « Build arm64 » : build-args ne vient pas de versions-build-args.py")
+
     def test_generateur_absent_du_job(self):
         self.repo.edit(".github/workflows/build-push.yml",
                        "{ echo 'build-args<<EOF'; ./scripts/versions-build-args.py; echo 'EOF'; }",
@@ -244,11 +269,72 @@ class CheckTest(unittest.TestCase):
         self.assertCaught("Makefile : le build local ne passe pas par versions-build-args.py")
 
 
+MULTI_VERSIONS = {"squid": "7.7", "c-icap": "0.6.5", "c-icap_sha256": "e" * 64, "alpine": "3.24"}
+
+
+def multi_dockerfile(args):
+    """Dockerfile d'une image du depot multi-images : ses ARG + leur garde."""
+    decl = "".join(f"ARG {a}\n" for a in args)
+    guard = " -a ".join(f'-n "${{{a}}}"' for a in args)
+    return f"FROM alpine:3.24@{DIGEST} AS builder\n{decl}RUN test {guard} || exit 1\nFROM scratch\n"
+
+
+MULTI_WORKFLOW = WORKFLOW.replace("          context: .\n", "          context: ${{ matrix.image }}/\n")
+
+
+class MultiDockerfileTest(unittest.TestCase):
+    """Un depot qui publie plusieurs images (squid/ c-icap/) avec un seul versions.json."""
+
+    def setUp(self):
+        self.repo = Repo()
+        (self.repo.root / "Dockerfile").unlink()
+        self.repo.write("versions.json", json.dumps(MULTI_VERSIONS))
+        self.repo.write("squid/Dockerfile", multi_dockerfile(["SQUID_VERSION"]))
+        self.repo.write("c-icap/Dockerfile", multi_dockerfile(["C_ICAP_VERSION", "C_ICAP_SHA256"]))
+        self.repo.write(".github/workflows/build-push.yml", MULTI_WORKFLOW)
+
+    def tearDown(self):
+        self.repo.close()
+
+    def assertCaught(self, needle):
+        errors = self.repo.errors()
+        self.assertTrue(any(needle in e for e in errors),
+                        f"attendu une erreur contenant {needle!r}, obtenu : {errors}")
+
+    def test_depot_multi_images_conforme_passe(self):
+        self.assertEqual(self.repo.errors(), [])
+
+    def test_valeur_par_defaut_dans_un_sous_dockerfile(self):
+        self.repo.edit("squid/Dockerfile", "ARG SQUID_VERSION\n", "ARG SQUID_VERSION=7.7\n")
+        self.assertCaught("squid/Dockerfile:2 : ARG SQUID_VERSION=7.7 -- valeur par defaut interdite")
+
+    def test_cle_consommee_par_aucun_dockerfile(self):
+        self.repo.write("versions.json", json.dumps(dict(MULTI_VERSIONS, clamav="1.5.4")))
+        self.assertCaught(".clamav n'alimente aucun ARG CLAMAV_VERSION d'aucun Dockerfile")
+
+    def test_garde_cherche_dans_le_dockerfile_qui_consomme(self):
+        # Le garde de SQUID_VERSION present dans c-icap/ ne couvre pas squid/.
+        self.repo.write("squid/Dockerfile", f"FROM alpine:3.24@{DIGEST}\nARG SQUID_VERSION\nFROM scratch\n")
+        self.repo.edit("c-icap/Dockerfile", "|| exit 1", '-a -n "${SQUID_VERSION}" || exit 1')
+        self.assertCaught("squid/Dockerfile : ARG SQUID_VERSION sans garde")
+
+    def test_tag_alpine_d_un_sous_dockerfile(self):
+        self.repo.edit("c-icap/Dockerfile", "alpine:3.24@", "alpine:3.23@")
+        self.assertCaught("c-icap/Dockerfile:1 : FROM alpine:3.23 mais versions.json dit .alpine = 3.24")
+
+    def test_aucun_dockerfile(self):
+        (self.repo.root / "squid/Dockerfile").unlink()
+        (self.repo.root / "c-icap/Dockerfile").unlink()
+        with self.assertRaises(SystemExit):
+            self.repo.errors()
+
+
 class GenerateurTest(unittest.TestCase):
     def test_convention_de_nommage(self):
         self.assertEqual(vba.key_to_arg("suricata"), "SURICATA_VERSION")
         self.assertEqual(vba.key_to_arg("libhtp_sha256"), "LIBHTP_SHA256")
         self.assertEqual(vba.key_to_arg("tcc_commit"), "TCC_COMMIT")
+        self.assertEqual(vba.key_to_arg("json-c_tag"), "JSON_C_TAG")
         self.assertEqual(vba.key_to_arg("c-icap"), "C_ICAP_VERSION")
         self.assertEqual(vba.key_to_arg("uptime-kuma"), "UPTIME_KUMA_VERSION")
         self.assertIsNone(vba.key_to_arg("alpine"))
