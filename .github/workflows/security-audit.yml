@@ -88,13 +88,17 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
 
-      - name: Install Grype
-        run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
-
+      # Action epinglee plutot que `curl .../grype/main/install.sh | sh` : le
+      # script d'installation suivait la branche main d'un depot tiers, sans
+      # version ni empreinte. Memes seuils qu'avant (high+, corrigeables).
       - name: Grype scan
-        run: |
-          grype ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest \
-                --fail-on high --only-fixed
+        uses: anchore/scan-action@v7
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
+          fail-build: 'true'
+          severity-cutoff: high
+          only-fixed: 'true'
+          output-format: table
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
