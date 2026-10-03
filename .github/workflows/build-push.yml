@@ -411,8 +411,11 @@ jobs:
         run: docker compose down -v
 
   # -------------------------------------------------------------------
-  #  arm64 companion build -- cross-compiled via QEMU, can't be
-  #  functionally tested here, pushed by digest for promote to merge.
+  #  arm64 companion build -- sur un runner arm64 NATIF (ubuntu-24.04-arm,
+  #  gratuit pour un depot public), pushed by digest for promote to merge.
+  #  Sous QEMU un rebuild complet arm64 prenait 27 min (php) a 1 h 40
+  #  (bind9) et retardait d'autant chaque publication ; en natif, php
+  #  rebuild a froid en 2 min 43 (mesure du 2026-10-03).
   #  Independent of build/test (different platform, no shared artifact),
   #  so it runs in parallel with them rather than waiting on the amd64
   #  test to pass -- `promote` below still needs both `test` and this job
@@ -421,7 +424,7 @@ jobs:
   build-arm64:
     name: Build arm64
     needs: [lint, resolve-versions]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     if: github.event_name != 'pull_request'
     outputs:
       digest: ${{ steps.build.outputs.digest }}
@@ -433,11 +436,6 @@ jobs:
       - name: Build-args depuis versions.json
         id: build-args
         uses: jbsky/hardened-ci/versions@28bf7b0bb40bd7f8e2eaae64534b053e1976bae0 # v0.7.0
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -459,8 +457,8 @@ jobs:
           provenance: mode=max
           build-args: ${{ steps.build-args.outputs.build-args }}
           outputs: type=image,"name=${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}",push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=nginx-waf-linux/arm64
-          cache-to: type=gha,mode=max,scope=nginx-waf-linux/arm64
+          cache-from: type=gha,scope=nginx-waf-linux/arm64-natif
+          cache-to: type=gha,mode=max,scope=nginx-waf-linux/arm64-natif
           # Meme raison que sur amd64, et une de plus : deux arches servies
           # depuis des caches d'ages differents publieraient des versions de
           # bibliotheques differentes sous un seul tag.
