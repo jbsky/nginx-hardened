@@ -703,8 +703,18 @@ jobs:
   cleanup:
     name: Prune old registry tags
     needs: promote
-    uses: ./.github/workflows/registry-cleanup.yml
-    secrets: inherit
+    # Un workflow appele ne peut que reduire les permissions : les donner ici.
+    permissions:
+      contents: read
+      packages: write
+    uses: jbsky/hardened-ci/.github/workflows/registry-cleanup.yml@0910a8f8fcbacbbe655870a91bd0716d949a9c82 # v0.3.0
+    with:
+      images: '["nginx-waf-hardened"]'
+    # Explicites : `secrets: inherit` n'est pas garanti entre depots d'un
+    # compte personnel.
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
   # -------------------------------------------------------------------
   release:
