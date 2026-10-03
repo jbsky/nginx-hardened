@@ -42,12 +42,13 @@ jobs:
       - name: main est publie
         run: |
           set -euo pipefail
-          # Meme resolution que le job resolve-versions de build-push : une
-          # stable nginx sortie mais jamais publiee echoue ici aussi.
-          VERSION=$(curl -fsSL https://nginx.org/en/download.html \
-            | grep -oP 'Stable version</h4>.*?Legacy' \
-            | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
-          REVISION=$(./scripts/build-revision.sh --unanchored -- Dockerfile conf/ errors/)
+          # Meme version et memes arguments que les jobs revision et
+          # update-readme de build-push. Jusqu'au 2026-10-03 cette etape lisait
+          # encore nginx.org (avant l'epinglage dans versions.json) avec trois
+          # chemins de moins : elle cherchait 1.30.5.18 quand main publiait
+          # 1.30.5.20, et aurait echoue a chaque audit.
+          VERSION=$(jq -r '.nginx' versions.json)
+          REVISION=$(./scripts/build-revision.sh --unanchored -- Dockerfile conf/ errors/ init.go go.mod keys/ versions.json)
           TAG="${VERSION}.${REVISION}"
           if docker manifest inspect "${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.IMAGE_NAME }}:${TAG}" >/dev/null; then
             echo "OK -- ${TAG} est publie"
