@@ -13,6 +13,7 @@ Convention de nommage (cle de versions.json -> ARG du Dockerfile) :
     "suricata"        -> SURICATA_VERSION
     "libhtp_sha256"   -> LIBHTP_SHA256
     "tcc_commit"      -> TCC_COMMIT
+    "json-c_tag"      -> JSON_C_TAG          (tag git amont, ex. json-c-0.19-20260627)
     "c-icap"          -> C_ICAP_VERSION        (- et . deviennent _)
     "alpine"          -> aucun ARG : c'est le tag des lignes `FROM alpine:<tag>@sha256:`
                          (la base est epinglee par digest, un ARG n'y changerait rien)
@@ -37,7 +38,9 @@ from pathlib import Path
 
 # `_VER` aussi : nginx portait NGINX_VER="" (vide = resolution de la derniere
 # version amont au build), invisible tant que seul `_VERSION` etait reconnu.
-VERSION_ARG = re.compile(r"^[A-Z][A-Z0-9_]*_(VERSION|VER|SHA256|COMMIT)$")
+# `_TAG` : bind9 ecrivait JSONC_TAG=json-c-0.19-20260627 en dur, une version
+# que rien ne comparait a versions.json.
+VERSION_ARG = re.compile(r"^[A-Z][A-Z0-9_]*_(VERSION|VER|SHA256|COMMIT|TAG)$")
 # Une etape produit les build-args si elle appelle ce script, ou l'action
 # composite de jbsky/hardened-ci qui l'enveloppe.
 GENERATORS = ("versions-build-args.py", "jbsky/hardened-ci/versions@")
@@ -49,7 +52,7 @@ def key_to_arg(key):
     if key in SPECIAL_KEYS:
         return None
     name = re.sub(r"[-.]", "_", key).upper()
-    if name.endswith(("_SHA256", "_COMMIT")):
+    if name.endswith(("_SHA256", "_COMMIT", "_TAG")):
         return name
     return name + "_VERSION"
 
@@ -169,9 +172,28 @@ def workflow_jobs(text):
 
 
 def steps_of(lines):
-    """Decoupe les lignes d'un job en etapes (`- ` a l'indentation des steps)."""
+    """Decoupe le bloc `steps:` d'un job en etapes (`- ` a l'indentation des steps).
+
+    Seul le bloc `steps:` compte : une `strategy.matrix` declaree avant (liste
+    `- name: ...`) etait prise pour les etapes, et les vraies etapes du job
+    n'etaient plus examinees -- un build sans build-args passait en vert
+    (job build-dockerfile de squid-hardened, 2026-10-03)."""
+    start = None
+    for i, line in enumerate(lines):
+        m = re.match(r"^(\s*)steps:\s*$", line)
+        if m:
+            start, base = i + 1, len(m.group(1))
+            break
+    if start is None:
+        return []
+    block = []
+    for line in lines[start:]:
+        if line.strip() and not line.lstrip().startswith("#") and len(line) - len(line.lstrip()) <= base \
+                and not line.lstrip().startswith("- "):
+            break  # fin du bloc steps: (cle suivante du job)
+        block.append(line)
     steps, cur, indent = [], None, None
-    for line in lines:
+    for line in block:
         m = re.match(r"^(\s*)- ", line)
         if m and (indent is None or len(m.group(1)) == indent):
             if indent is None:
@@ -225,51 +247,70 @@ def check_workflow(text, label):
 # --------------------------------------------------------------------------
 #  Le controle
 # --------------------------------------------------------------------------
-ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Z][A-Z0-9_]*_(?:VERSION|VER|SHA256|COMMIT))\s*(?::=|\?=|=|:)\s*(\S+)")
+ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Z][A-Z0-9_]*_(?:VERSION|VER|SHA256|COMMIT|TAG))\s*(?::=|\?=|=|:)\s*(\S+)")
+
+
+def dockerfiles(root):
+    """Le Dockerfile racine ; a defaut, un Dockerfile par sous-repertoire (un
+    depot qui publie plusieurs images, comme squid/ c-icap/ clamav/ partageant
+    un seul versions.json)."""
+    root = Path(root)
+    if (root / "Dockerfile").exists():
+        return [root / "Dockerfile"]
+    found = sorted(root.glob("*/Dockerfile"))
+    if not found:
+        raise SystemExit("versions-build-args: aucun Dockerfile (ni ./Dockerfile ni */Dockerfile)")
+    return found
 
 
 def check(root="."):
     root = Path(root)
     errors = []
     versions = load_versions(root / "versions.json")
-    dockerfile = (root / "Dockerfile").read_text()
-    args, froms = parse_dockerfile(dockerfile)
-    base_keys = base_image_keys(versions, froms)
+    files = [(str(p.relative_to(root)), p.read_text()) for p in dockerfiles(root)]
+    parsed = [(label, text, *parse_dockerfile(text)) for label, text in files]
+    all_froms = [f for _, _, _, froms in parsed for f in froms]
+    base_keys = base_image_keys(versions, all_froms)
     expected = {key_to_arg(k): k for k in versions if key_to_arg(k) and k not in base_keys}
     declared = {}
-    for n, name, default in args:
-        if not VERSION_ARG.match(name):
-            continue
-        first = name not in declared
-        declared.setdefault(name, n)
-        if default is not None:
-            errors.append(f"Dockerfile:{n} : ARG {name}={default} -- valeur par defaut interdite, "
-                          f"la version vient de versions.json")
-        if not first:
-            continue  # ARG redeclare dans un stage : l'absence de cle est deja signalee
-        if name == "ALPINE_VERSION":
-            errors.append(f"Dockerfile:{n} : ARG ALPINE_VERSION ne pilote rien (la base est epinglee "
-                          f"tag@sha256 sur les FROM, verifies contre .alpine) : le supprimer")
-        elif name not in expected:
-            errors.append(f"Dockerfile:{n} : ARG {name} sans cle dans versions.json "
-                          f"(une version ne s'ecrit que dans versions.json)")
+    for label, text, args, froms in parsed:
+        seen = set()
+        for n, name, default in args:
+            if not VERSION_ARG.match(name):
+                continue
+            first = name not in seen
+            seen.add(name)
+            declared.setdefault(name, (label, n))
+            if default is not None:
+                errors.append(f"{label}:{n} : ARG {name}={default} -- valeur par defaut interdite, "
+                              f"la version vient de versions.json")
+            if not first:
+                continue  # ARG redeclare dans un stage : l'absence de cle est deja signalee
+            if name == "ALPINE_VERSION":
+                errors.append(f"{label}:{n} : ARG ALPINE_VERSION ne pilote rien (la base est epinglee "
+                              f"tag@sha256 sur les FROM, verifies contre .alpine) : le supprimer")
+            elif name not in expected:
+                errors.append(f"{label}:{n} : ARG {name} sans cle dans versions.json "
+                              f"(une version ne s'ecrit que dans versions.json)")
+            elif not has_guard(text, name):
+                # Le garde se cherche dans le Dockerfile qui consomme l'ARG.
+                errors.append(f"{label} : ARG {name} sans garde (test -n \"${{{name}}}\" ou ${{{name}:?}}) : "
+                              f"un build sans build-arg doit echouer tot, pas construire avec une valeur vide")
+    where = "du Dockerfile" if len(files) == 1 else "d'aucun Dockerfile (" + ", ".join(l for l, _ in files) + ")"
     for arg, key in expected.items():
         if arg not in declared:
-            errors.append(f"versions.json : .{key} n'alimente aucun ARG {arg} du Dockerfile (cle morte)")
-        elif not has_guard(dockerfile, arg):
-            errors.append(f"Dockerfile : ARG {arg} sans garde (test -n \"${{{arg}}}\" ou ${{{arg}:?}}) : "
-                          f"un build sans build-arg doit echouer tot, pas construire avec une valeur vide")
+            errors.append(f"versions.json : .{key} n'alimente aucun ARG {arg} {where} (cle morte)")
 
     alpine = versions.get("alpine")
-    alpine_froms = [(n, ref) for n, ref in froms if ref.startswith("alpine:")]
-    for n, ref in alpine_froms:
+    alpine_froms = [(label, n, ref) for label, _, _, froms in parsed for n, ref in froms if ref.startswith("alpine:")]
+    for label, n, ref in alpine_froms:
         m = re.match(r"^alpine:([^@]+)@sha256:[0-9a-f]{64}$", ref)
         if not m:
-            errors.append(f"Dockerfile:{n} : FROM {ref} -- alpine doit etre epinglee tag@sha256")
+            errors.append(f"{label}:{n} : FROM {ref} -- alpine doit etre epinglee tag@sha256")
         elif alpine is None:
-            errors.append(f"Dockerfile:{n} : FROM {ref} mais versions.json n'a pas de cle .alpine")
+            errors.append(f"{label}:{n} : FROM {ref} mais versions.json n'a pas de cle .alpine")
         elif m.group(1) != alpine:
-            errors.append(f"Dockerfile:{n} : FROM alpine:{m.group(1)} mais versions.json dit .alpine = {alpine}")
+            errors.append(f"{label}:{n} : FROM alpine:{m.group(1)} mais versions.json dit .alpine = {alpine}")
     if alpine is not None and not alpine_froms:
         errors.append("versions.json : .alpine mais aucune ligne FROM alpine:<tag>@sha256 (cle morte)")
 
@@ -278,15 +319,16 @@ def check(root="."):
     # Un FROM passe en 8.6 pendant que version-watch suit 8.5 serait une 2e source.
     for key in sorted(base_keys):
         branch = versions[key]
-        for n, ref in froms:
-            if image_name(ref) != key:
-                continue
-            m = re.match(r"^[^@]+:([^@:]+)@sha256:[0-9a-f]{64}$", ref)
-            if not m:
-                errors.append(f"Dockerfile:{n} : FROM {ref} -- l'image de base .{key} doit etre epinglee tag@sha256")
-            elif not (m.group(1) == branch or m.group(1).startswith((branch + ".", branch + "-"))):
-                errors.append(f"Dockerfile:{n} : FROM {key}:{m.group(1)} hors de la branche "
-                              f".{key} = {branch} de versions.json")
+        for label, _, _, froms in parsed:
+            for n, ref in froms:
+                if image_name(ref) != key:
+                    continue
+                m = re.match(r"^[^@]+:([^@:]+)@sha256:[0-9a-f]{64}$", ref)
+                if not m:
+                    errors.append(f"{label}:{n} : FROM {ref} -- l'image de base .{key} doit etre epinglee tag@sha256")
+                elif not (m.group(1) == branch or m.group(1).startswith((branch + ".", branch + "-"))):
+                    errors.append(f"{label}:{n} : FROM {key}:{m.group(1)} hors de la branche "
+                                  f".{key} = {branch} de versions.json")
 
     wf = root / ".github/workflows/build-push.yml"
     if wf.exists():
@@ -318,8 +360,8 @@ def main(argv):
         print("versions-build-args: versions.json est la seule source des versions du build")
         return 0
     versions = load_versions("versions.json")
-    df = Path("Dockerfile")
-    base = base_image_keys(versions, parse_dockerfile(df.read_text())[1]) if df.exists() else set()
+    froms = [f for p in dockerfiles(".") for f in parse_dockerfile(p.read_text())[1]]
+    base = base_image_keys(versions, froms)
     pairs = build_args(versions, base)
     if argv[1:] == ["--docker"]:
         print(" ".join(shlex.quote(f"--build-arg={a}={v}") for a, v in pairs))
