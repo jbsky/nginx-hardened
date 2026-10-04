@@ -37,7 +37,7 @@ jobs:
       # hardened-ci a la ref epinglee, plus aucune copie dans ce depot.
       - name: Scripts partages de hardened-ci
         id: hci
-        uses: jbsky/hardened-ci/tools@37f84a73b14b4da3f00004f94977d5f2f35d2635 # v0.8.0
+        uses: jbsky/hardened-ci/tools@9ca47b8942dd2ba041644dd345bbdb34a26ef6d0 # v0.9.0
 
       # Trivy ne voit dans cette image FROM scratch que ce qui garde une
       # metadonnee de paquet (binaire Go d'init) : le service et ses
