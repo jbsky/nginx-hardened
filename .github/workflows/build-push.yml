@@ -164,7 +164,7 @@ jobs:
       # chaque docker/build-push-action du job doit les recevoir.
       - name: Build-args depuis versions.json
         id: build-args
-        uses: jbsky/hardened-ci/versions@37f84a73b14b4da3f00004f94977d5f2f35d2635 # v0.8.0
+        uses: jbsky/hardened-ci/versions@9ca47b8942dd2ba041644dd345bbdb34a26ef6d0 # v0.9.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -309,7 +309,7 @@ jobs:
       # hardened-ci a la ref epinglee, plus aucune copie dans ce depot.
       - name: Scripts partages de hardened-ci
         id: hci
-        uses: jbsky/hardened-ci/tools@37f84a73b14b4da3f00004f94977d5f2f35d2635 # v0.8.0
+        uses: jbsky/hardened-ci/tools@9ca47b8942dd2ba041644dd345bbdb34a26ef6d0 # v0.9.0
 
       - name: Login ghcr.io
         if: env.PUBLISH == 'true'
@@ -388,6 +388,13 @@ jobs:
         run: |
           "${{ steps.hci.outputs.dir }}/image-manifest.py" --check "${{ steps.compose-image.outputs.tag }}" -m image.manifest
 
+      # Ce que l'image embarque, lisible dans le resume du job (hardened-ci
+      # v0.9.0) : rendu du manifeste, que --check vient de prouver conforme.
+      - name: Image inventory (job summary)
+        run: |
+          set -euo pipefail
+          "${{ steps.hci.outputs.dir }}/image-manifest.py" --report -m image.manifest --name "${{ env.IMAGE_NAME }}" >> "$GITHUB_STEP_SUMMARY"
+
       # `lddtree` signale une dependance introuvable sur stderr et sort quand
       # meme en 0 : un build peut donc publier une image `FROM scratch` a
       # laquelle il manque une bibliotheque, l'erreur ne sortant qu'au
@@ -435,7 +442,7 @@ jobs:
       # chaque docker/build-push-action du job doit les recevoir.
       - name: Build-args depuis versions.json
         id: build-args
-        uses: jbsky/hardened-ci/versions@37f84a73b14b4da3f00004f94977d5f2f35d2635 # v0.8.0
+        uses: jbsky/hardened-ci/versions@9ca47b8942dd2ba041644dd345bbdb34a26ef6d0 # v0.9.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -492,7 +499,7 @@ jobs:
       # hardened-ci a la ref epinglee, plus aucune copie dans ce depot.
       - name: Scripts partages de hardened-ci
         id: hci
-        uses: jbsky/hardened-ci/tools@37f84a73b14b4da3f00004f94977d5f2f35d2635 # v0.8.0
+        uses: jbsky/hardened-ci/tools@9ca47b8942dd2ba041644dd345bbdb34a26ef6d0 # v0.9.0
 
       - name: Compute build revision
         id: revision
@@ -700,7 +707,7 @@ jobs:
       # hardened-ci a la ref epinglee, plus aucune copie dans ce depot.
       - name: Scripts partages de hardened-ci
         id: hci
-        uses: jbsky/hardened-ci/tools@37f84a73b14b4da3f00004f94977d5f2f35d2635 # v0.8.0
+        uses: jbsky/hardened-ci/tools@9ca47b8942dd2ba041644dd345bbdb34a26ef6d0 # v0.9.0
 
       - name: Rewrite tag block
         run: |
@@ -739,7 +746,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: jbsky/hardened-ci/.github/workflows/registry-cleanup.yml@37f84a73b14b4da3f00004f94977d5f2f35d2635 # v0.8.0
+    uses: jbsky/hardened-ci/.github/workflows/registry-cleanup.yml@9ca47b8942dd2ba041644dd345bbdb34a26ef6d0 # v0.9.0
     with:
       images: '["nginx-waf-hardened"]'
     # Explicites : `secrets: inherit` n'est pas garanti entre depots d'un
