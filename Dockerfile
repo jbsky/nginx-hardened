@@ -228,7 +228,7 @@ RUN . /etc/profile.d/ver.sh && \
 # ---------------------------------------------------------------------------
 # Stage 2: Go builder (entrypoint + healthcheck)
 # ---------------------------------------------------------------------------
-FROM golang:1.26-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS gobuilder
+FROM golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS gobuilder
 WORKDIR /build
 COPY go.mod init.go ./
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags='-s -w' -o /init .
