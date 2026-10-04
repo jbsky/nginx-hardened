@@ -152,14 +152,16 @@ This image is signed with [cosign](https://github.com/sigstore/cosign) using key
 ```bash
 # From ghcr.io (signatures stored natively)
 cosign verify \
-  --certificate-identity-regexp '^https://github.com/jbsky/nginx-hardened/' \
+  --certificate-identity-regexp '^https://github.com/(jbsky/nginx-hardened|jbsky/hardened-ci)/' \
+  --certificate-github-workflow-repository jbsky/nginx-hardened \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/jbsky/nginx-waf-hardened:latest
 
 # From Docker Hub (signatures stored in ghcr.io)
 COSIGN_REPOSITORY=ghcr.io/jbsky/nginx-waf-hardened \
   cosign verify \
-  --certificate-identity-regexp '^https://github.com/jbsky/nginx-hardened/' \
+  --certificate-identity-regexp '^https://github.com/(jbsky/nginx-hardened|jbsky/hardened-ci)/' \
+  --certificate-github-workflow-repository jbsky/nginx-hardened \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   docker.io/jbsky/nginx-waf-hardened:latest
 ```
