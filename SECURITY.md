@@ -38,8 +38,8 @@ status: affected`). Our own `security-audit.yml` never caught this because it on
 scans `:latest` -- an external scanner walking the whole repo (e.g. Docker Hub's own
 vulnerability scan) would flag it independently, which is how this was noticed.
 
-Fixed by `registry-cleanup.yml` (`scripts/prune-registry-tags.sh` for Docker Hub,
-`scripts/prune-ghcr-tags.sh` for GHCR), called as a job from both `build-push.yml` and
+Fixed by `registry-cleanup.yml` (`prune-registry-tags.sh` (jbsky/hardened-ci) for Docker Hub,
+`prune-ghcr-tags.sh` (jbsky/hardened-ci) for GHCR), called as a job from both `build-push.yml` and
 `version-watch.yml` after every push, and directly `workflow_dispatch`-able. Keeps the
 last 3 semver tags + `:latest`, deletes older semver tags and all `auto-*` snapshot
 tags (already preserved via git tags/GitHub Releases, never meant for pinning). Only
@@ -60,7 +60,7 @@ automated retention alone guarantees no vulnerable tag survives.
 
 **Two script bugs found rolling this out fleet-wide (2026-07-21), fixed same day**:
 this pattern was replicated across all `docker-hardened` repos, and the shared
-`scripts/prune-registry-tags.sh`/`prune-ghcr-tags.sh` had two latent bugs that didn't
+`prune-registry-tags.sh` (jbsky/hardened-ci)/`prune-ghcr-tags.sh` had two latent bugs that didn't
 manifest here (nginx never exceeded 3 semver tags, and its `X.Y.Z` scheme dodged the
 regex bug) but caused real damage on `squid-hardened` and `php-fpm-hardened`:
 
