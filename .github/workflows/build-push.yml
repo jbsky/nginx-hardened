@@ -77,14 +77,6 @@ jobs:
         with:
           scandir: ./scripts
 
-      # Six depots publics et autonomes portent les MEMES scripts, dupliques
-      # parce qu'ils ne peuvent pas se referencer. Rien ne les tenait alignes
-      # que la discipline. Toucher un script partage oblige desormais a
-      # toucher sa reference, donc a le voir dans le diff de la PR. La
-      # divergence ENTRE depots se voit avec
-      # opencode-profile/scripts/check-vendored-sync.sh, qui a les six clones.
-      - name: Vendored scripts unchanged
-        run: sha256sum -c scripts/VENDORED.sha256
 
       - uses: actions/setup-go@v7
         with:
@@ -172,7 +164,7 @@ jobs:
       # chaque docker/build-push-action du job doit les recevoir.
       - name: Build-args depuis versions.json
         id: build-args
-        uses: jbsky/hardened-ci/versions@28bf7b0bb40bd7f8e2eaae64534b053e1976bae0 # v0.7.0
+        uses: jbsky/hardened-ci/versions@37f84a73b14b4da3f00004f94977d5f2f35d2635 # v0.8.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -313,6 +305,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Scripts partages (build-revision, image-manifest, ...) : ceux de
+      # hardened-ci a la ref epinglee, plus aucune copie dans ce depot.
+      - name: Scripts partages de hardened-ci
+        id: hci
+        uses: jbsky/hardened-ci/tools@37f84a73b14b4da3f00004f94977d5f2f35d2635 # v0.8.0
+
       - name: Login ghcr.io
         if: env.PUBLISH == 'true'
         uses: docker/login-action@v4
@@ -387,7 +385,8 @@ jobs:
       # echoue ici ; si elle est voulue, regenerer le manifeste DANS LE MEME
       # COMMIT -- c'est le diff qu'on relit dans la PR.
       - name: Image manifest
-        run: ./scripts/image-manifest.py --check "${{ steps.compose-image.outputs.tag }}" -m image.manifest
+        run: |
+          "${{ steps.hci.outputs.dir }}/image-manifest.py" --check "${{ steps.compose-image.outputs.tag }}" -m image.manifest
 
       # `lddtree` signale une dependance introuvable sur stderr et sort quand
       # meme en 0 : un build peut donc publier une image `FROM scratch` a
@@ -397,7 +396,8 @@ jobs:
       # demande au vrai chargeur musl, dans un chroot sur le filesystem de
       # l'image, de resoudre chaque ELF embarque.
       - name: Image closure
-        run: ./scripts/check-image-closure.sh "${{ steps.compose-image.outputs.tag }}"
+        run: |
+          "${{ steps.hci.outputs.dir }}/check-image-closure.sh" "${{ steps.compose-image.outputs.tag }}"
 
       - name: Run smoke tests
         run: ./scripts/test.sh 127.0.0.1 80
@@ -435,7 +435,7 @@ jobs:
       # chaque docker/build-push-action du job doit les recevoir.
       - name: Build-args depuis versions.json
         id: build-args
-        uses: jbsky/hardened-ci/versions@28bf7b0bb40bd7f8e2eaae64534b053e1976bae0 # v0.7.0
+        uses: jbsky/hardened-ci/versions@37f84a73b14b4da3f00004f94977d5f2f35d2635 # v0.8.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -488,12 +488,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Scripts partages (build-revision, image-manifest, ...) : ceux de
+      # hardened-ci a la ref epinglee, plus aucune copie dans ce depot.
+      - name: Scripts partages de hardened-ci
+        id: hci
+        uses: jbsky/hardened-ci/tools@37f84a73b14b4da3f00004f94977d5f2f35d2635 # v0.8.0
+
       - name: Compute build revision
         id: revision
         run: |
           set -euo pipefail
           VERSION="${{ needs.resolve-versions.outputs.nginx }}"
-          REVISION=$(./scripts/build-revision.sh --unanchored -- Dockerfile conf/ errors/ init.go go.mod keys/ versions.json)
+          REVISION=$("${{ steps.hci.outputs.dir }}/build-revision.sh" --unanchored -- Dockerfile conf/ errors/ init.go go.mod keys/ versions.json)
           echo "tag=${VERSION}.${REVISION}" >> "$GITHUB_OUTPUT"
 
       - name: Is this tag already published?
@@ -690,12 +696,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Scripts partages (build-revision, image-manifest, ...) : ceux de
+      # hardened-ci a la ref epinglee, plus aucune copie dans ce depot.
+      - name: Scripts partages de hardened-ci
+        id: hci
+        uses: jbsky/hardened-ci/tools@37f84a73b14b4da3f00004f94977d5f2f35d2635 # v0.8.0
+
       - name: Rewrite tag block
         run: |
           set -euo pipefail
           VERSION="${{ needs.resolve-versions.outputs.nginx }}"
-          REVISION=$(./scripts/build-revision.sh --unanchored -- Dockerfile conf/ errors/ init.go go.mod keys/ versions.json)
-          ./scripts/update-readme-tags.sh "jbsky/nginx-waf-hardened=${VERSION}=${VERSION}.${REVISION}"
+          REVISION=$("${{ steps.hci.outputs.dir }}/build-revision.sh" --unanchored -- Dockerfile conf/ errors/ init.go go.mod keys/ versions.json)
+          "${{ steps.hci.outputs.dir }}/update-readme-tags.sh" "jbsky/nginx-waf-hardened=${VERSION}=${VERSION}.${REVISION}"
 
       - name: Commit if changed
         run: |
@@ -727,7 +739,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: jbsky/hardened-ci/.github/workflows/registry-cleanup.yml@0910a8f8fcbacbbe655870a91bd0716d949a9c82 # v0.3.0
+    uses: jbsky/hardened-ci/.github/workflows/registry-cleanup.yml@37f84a73b14b4da3f00004f94977d5f2f35d2635 # v0.8.0
     with:
       images: '["nginx-waf-hardened"]'
     # Explicites : `secrets: inherit` n'est pas garanti entre depots d'un

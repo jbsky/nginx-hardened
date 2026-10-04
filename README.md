@@ -48,7 +48,7 @@ inaccessible. **En production, epinglez le tag qui porte le compteur.**
 <!-- END:tags -->
 
 Ce tableau, les versions citees dans le texte et les tags qui apparaissent
-dans les exemples sont tous rendus par `scripts/update-readme-tags.sh` apres
+dans les exemples sont tous rendus par `update-readme-tags.sh` (jbsky/hardened-ci) apres
 chaque publication -- ne rien editer a la main.
 
 Le compteur compte les commits qui touchent les inputs de l'image (`Dockerfile`,
@@ -79,7 +79,7 @@ docker build $(scripts/versions-build-args.py --docker) .
 Les trois versions sont volontairement absentes de ce README. Seule celle de
 Nginx est rendue par la CI (tableau et exemples ci-dessus) ; ModSecurity et CRS
 ne sont nulle part, parce qu'une valeur qui n'est ni resolue ni rendue derive en
-silence -- la garde de `scripts/update-readme-tags.sh` ne connait que la famille
+silence -- la garde de `update-readme-tags.sh` (jbsky/hardened-ci) ne connait que la famille
 de version de l'image et ne les rattraperait pas.
 
 ## Usage rapide
