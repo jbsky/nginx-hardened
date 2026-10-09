@@ -21,7 +21,7 @@
 # ---------------------------------------------------------------------------
 # Stage 0: fetcher — fige les versions passees en build-args
 # ---------------------------------------------------------------------------
-FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS fetcher
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS fetcher
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
@@ -41,7 +41,7 @@ RUN test -n "${NGINX_VERSION}" -a -n "${MODSECURITY_VERSION}" -a -n "${OWASP_CRS
 # ---------------------------------------------------------------------------
 # Stage 1: builder — compile tout from source
 # ---------------------------------------------------------------------------
-FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS builder
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS builder
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
@@ -236,7 +236,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags='-s -w' -o /init .
 # ---------------------------------------------------------------------------
 # Stage 3: prep (assemble runtime filesystem)
 # ---------------------------------------------------------------------------
-FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS prep
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS prep
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
