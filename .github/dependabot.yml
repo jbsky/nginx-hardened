@@ -15,9 +15,11 @@ updates:
 
   - package-ecosystem: "docker"
     directory: "/"
+    # Quotidien : un digest de base corrige une CVE (Go dans init, Python,
+    # Alpine) ; en hebdomadaire le correctif attendait jusqu'au lundi
+    # (CVE-2026-78667, 2026-10-09).
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "daily"
     labels: ["dependencies", "docker"]
     commit-message:
       prefix: "build(nginx)"
