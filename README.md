@@ -44,7 +44,7 @@ inaccessible. **En production, epinglez le tag qui porte le compteur.**
 <!-- BEGIN:tags (genere par la CI -- ne pas editer a la main) -->
 | Image | Version amont | Tag immuable a epingler |
 |-------|---------------|-------------------------|
-| `jbsky/nginx-waf-hardened` | `1.30.5` | `1.30.5.24` |
+| `jbsky/nginx-waf-hardened` | `1.30.5` | `1.30.5.25` |
 <!-- END:tags -->
 
 Ce tableau, les versions citees dans le texte et les tags qui apparaissent
