@@ -1,0 +1,36 @@
+# =====================================================================
+#  Base Watch -- le digest des images de base suit l'amont tout seul.
+#  La logique vit dans jbsky/hardened-ci (workflow reutilisable, teste) ;
+#  ce fichier ne porte que le planning.
+#
+#  Le tag des `FROM` n'est jamais touche, seul le digest : une montee de
+#  branche (golang 1.27 -> 1.28, alpine 3.24 -> 3.25) reste une PR
+#  Dependabot, donc une decision humaine.
+#
+#  Apres version-watch (6h00), pour ne pas se disputer main. Minute
+#  decalee d'un depot a l'autre.
+# =====================================================================
+name: base-watch
+
+on:
+  schedule:
+    - cron: '14 7 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Relever les digests et s'arreter la (ni commit, ni publication)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    uses: jbsky/hardened-ci/.github/workflows/base-watch.yml@20dbd2ae1f65f1d72d88ec7a3c78ed716ba2009e # v1.2.0
+    permissions:
+      contents: write
+      actions: write
+    with:
+      # null sur un run planifie : un booleen type refuse null.
+      dry_run: ${{ inputs.dry_run == true }}
