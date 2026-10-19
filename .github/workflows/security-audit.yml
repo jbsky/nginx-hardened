@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   audit:
-    uses: jbsky/hardened-ci/.github/workflows/security-audit.yml@20dbd2ae1f65f1d72d88ec7a3c78ed716ba2009e # v1.2.0
+    uses: jbsky/hardened-ci/.github/workflows/security-audit.yml@8c22d396d42e663d887de0aca16a5fad4e8659f8 # v1.3.1
     permissions:
       contents: read
       packages: read
