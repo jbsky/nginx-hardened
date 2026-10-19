@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   prune:
-    uses: jbsky/hardened-ci/.github/workflows/registry-cleanup.yml@20dbd2ae1f65f1d72d88ec7a3c78ed716ba2009e # v1.2.0
+    uses: jbsky/hardened-ci/.github/workflows/registry-cleanup.yml@c0be9ec717d12aa6776ec79ab9e29c4c1979a59b # v1.4.3
     with:
       images: '["nginx-waf-hardened"]'
     secrets:
