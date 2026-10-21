@@ -22,3 +22,9 @@ Thumbs.db
 docker-compose.override.yml
 nginx-init
 __pycache__/
+
+# Checkout de jbsky/hardened-ci pose par la CI dans l'espace de travail
+# (`path: .hardened-ci`). Sans cette ligne, un `git add -A` l'enregistre en
+# gitlink (mode 160000) sans entree .gitmodules, et chaque checkout suivant
+# sort « fatal: No url found for submodule path '.hardened-ci' ».
+.hardened-ci/
