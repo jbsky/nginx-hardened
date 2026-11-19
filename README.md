@@ -2,44 +2,67 @@
 
 [![Build](https://github.com/jbsky/nginx-hardened/actions/workflows/build-push.yml/badge.svg)](https://github.com/jbsky/nginx-hardened/actions/workflows/build-push.yml)
 [![Docker Hub](https://img.shields.io/docker/v/jbsky/nginx-waf-hardened?sort=semver&label=Docker%20Hub)](https://hub.docker.com/r/jbsky/nginx-waf-hardened)
-[![Hardening](https://img.shields.io/badge/hardening-platine-blueviolet)](https://github.com/jbsky/nginx-hardened#security--verification)
+[![Hardening](https://img.shields.io/badge/hardening-platine-blueviolet)](https://github.com/jbsky/nginx-hardened#hardening)
 
-Image Docker Nginx compilee from source, hardenee (FROM scratch, Go init, tini PID 1), avec WAF ModSecurity + OWASP CRS.
+nginx <!--v:nginx-waf-hardened-->1.30.6<!--/v--> built from source with the ModSecurity WAF and
+the OWASP Core Rule Set, in a `FROM scratch` image: no shell, no package
+manager, no OS. Only nginx, its modules, their libraries, `tini` and a static
+Go init. Published as `jbsky/nginx-waf-hardened`.
 
-## Modules inclus
+## What is built
 
-| Module | Fonction |
-|--------|----------|
-| ModSecurity v3 | WAF en mode blocking |
-| OWASP Core Rule Set | Regles de securite WAF (suivi quotidien par version-watch) |
-| GeoIP2 | Blocage geographique (db-ip free) |
-| VTS | Monitoring trafic (`/vts-status`) |
-| headers-more | Controle complet des headers HTTP |
+| Module | Role |
+|---|---|
+| ModSecurity v3 | WAF in blocking mode |
+| OWASP Core Rule Set | WAF rules |
+| GeoIP2 | country blocking (db-ip lite database) |
+| VTS | traffic monitoring (`/vts-status`) |
+| headers-more | full control of HTTP headers |
+
+- **nginx**: release tarball verified against the nginx signing keys
+  committed in [`keys/`](keys). Built without autoindex, SSI or the mail
+  modules.
+- **ModSecurity and the CRS**: cloned at the release tag pinned in
+  [`versions.json`](versions.json). Their versions are deliberately not quoted
+  in this README: CI renders only the nginx version, and a value that is
+  neither resolved nor rendered drifts silently.
+- **The four nginx modules** (ModSecurity connector, GeoIP2, VTS,
+  headers-more) are built from the head of their upstream `master` branch, not
+  from a pinned version.
+- **GeoIP**: only the db-ip country lite database is downloaded at build time
+  (the city database, never read by the configuration, is not shipped).
+- Custom error pages in [`errors/`](errors) (403, 404, 410, 5xx, maintenance).
 
 ## Hardening
 
-| Mesure | Detail |
-|--------|--------|
-| FROM scratch | Zero shell, zero package manager dans l'image finale |
-| Go static init | Binary entrypoint + healthcheck HTTP /healthz |
-| tini PID 1 | Signal forwarding + zombie reaping |
-| Non-root | uid 1999 |
-| Compilation hardenee | RELRO, PIE, SSP, FORTIFY_SOURCE, -fPIC, stack-clash, NX |
-| GPG verification | Tarball nginx verifie (cles embarquees dans le repo) |
-| server_tokens off | Pas de version Nginx dans les headers |
-| ModSecurity blocking | WAF actif, pas seulement detection |
-| Rate + connection limiting | Anti-DDoS layer 7 |
-| Anti-slowloris | Timeouts client agressifs |
-| Bot blocking | User-agents vides, methodes non-standard |
-| Security headers | CSP, HSTS, X-Frame-Options, Referrer-Policy, Permissions-Policy |
+Tier **platine** (OCI label `security.hardening.tier`): a `FROM scratch` image
+with no shell and no package manager, a non-root user, a static Go init behind
+`tini` as PID 1, and binaries built with hardening flags.
+
+- Non-root user `1999:1999`; tested under a read-only rootfs, `cap_drop: ALL`
+  (plus `NET_BIND_SERVICE`) and `no-new-privileges`.
+- Compiler flags: PIE, full RELRO, `-fstack-protector-strong`,
+  `-fstack-clash-protection`, `_FORTIFY_SOURCE=2`, non-executable stack.
+- Libraries copied from a dependency closure resolved at build time
+  (`lddtree`), never `/lib` or `/usr/lib` wholesale.
+- The init validates the configuration (`nginx -t`) before starting.
+- Shipped configuration ([`conf/`](conf)):
+  - ModSecurity in blocking mode, not detection only;
+  - `server_tokens off`;
+  - rate and connection limiting per client, aggressive client timeouts
+    (slowloris);
+  - empty user agents and non-standard methods refused;
+  - security headers: CSP, HSTS, `X-Frame-Options`, `Referrer-Policy`,
+    `Permissions-Policy`.
 
 ## Tags
 
-Trois tags par image : `latest` (dernier build de `main`), la version amont
-seule, et la version amont suffixee d'un **compteur de revision**. Les deux
-premiers sont **reecrits en place** a chaque rebuild -- bump Alpine, correctif
-CVE, changement de config -- et le build qu'ils designaient devient alors
-inaccessible. **En production, epinglez le tag qui porte le compteur.**
+Every image is published under three tags: `latest` (last build of `main`),
+the upstream version alone, and the upstream version followed by a **revision
+counter**. The first two are **overwritten in place** on every rebuild (Alpine
+update, CVE fix, configuration change), and the build they pointed to can no
+longer be pulled by them. **In production, pin the tag that carries the
+counter.**
 
 <!-- BEGIN:tags (genere par la CI -- ne pas editer a la main) -->
 | Image | Version amont | Tag immuable a epingler |
@@ -47,147 +70,121 @@ inaccessible. **En production, epinglez le tag qui porte le compteur.**
 | `jbsky/nginx-waf-hardened` | `1.30.6` | `1.30.6.35` |
 <!-- END:tags -->
 
-Ce tableau, les versions citees dans le texte et les tags qui apparaissent
-dans les exemples sont tous rendus par `update-readme-tags.sh` (jbsky/hardened-ci) apres
-chaque publication -- ne rien editer a la main.
+This table, the versions quoted in the text and the tags in the examples are
+rendered by `update-readme-tags.sh` ([hardened-ci](https://github.com/jbsky/hardened-ci))
+after each publication: do not edit them by hand.
 
-Le compteur compte les commits qui touchent les inputs de l'image (`Dockerfile`,
-`conf/`, `errors/`). Un commit qui ne touche que `.github/` ne l'incremente pas.
+The counter counts the commits that touch the image inputs (the `revision`
+list of [`.github/hardened-ci.json`](.github/hardened-ci.json)). A commit that
+only touches `.github/` does not increment it. Unlike the other images of the
+fleet, it **does not restart at `0`** with each new nginx version: it counts
+from the repository's first commit (`--unanchored`), a leftover from the time
+the nginx, ModSecurity and CRS versions were resolved at build time instead of
+being pinned in `versions.json`. Tags stay unique, because the version prefix
+changes with each release.
 
-Contrairement aux autres images de la flotte, il **ne repart pas a zero** a
-chaque nouvelle version de Nginx : les versions Nginx, ModSecurity et CRS sont
-resolues au build (voir Auto-versioning ci-dessous) et ne sont donc inscrites
-nulle part dans git pour servir d'ancre.
+`docker.io` and `ghcr.io` publish the same tags with the same digest, for
+`linux/amd64` and `linux/arm64`. Each registry keeps the last six immutable
+tags of an image, so that superseded builds do not stay pullable: move your
+pin forward.
 
-Les deux registres, `docker.io` et `ghcr.io`, publient les memes tags avec le
-meme digest.
+`version-watch` checks nginx, ModSecurity and the CRS daily, bumps
+`versions.json` and republishes: since `versions.json` is a revision input,
+each bump yields a new immutable tag, and a tag always names the same image.
 
-## Auto-versioning
+## Usage
 
-Les versions Nginx, ModSecurity et OWASP CRS sont epinglees dans `versions.json`,
-que `version-watch` met a jour chaque jour (commit puis publication par
-`build-push`) : un tag `<version>.<revision>` designe toujours la meme image.
-`make build` passe ces versions au build, par le meme generateur que la CI
-(`scripts/versions-build-args.py`) ; le Dockerfile n'a aucune valeur par defaut
-et un build sans build-arg echoue au garde. Pour essayer une autre version :
-la changer dans `versions.json`, jamais en ligne de commande.
+```bash
+docker run -d --name nginx-waf \
+  --read-only --cap-drop ALL --cap-add NET_BIND_SERVICE \
+  --security-opt no-new-privileges:true \
+  --tmpfs /tmp:size=64m,mode=1777,nodev,nosuid,noexec \
+  --tmpfs /var/run/nginx:size=1m,mode=0755,uid=1999,gid=1999 \
+  --tmpfs /var/cache/nginx:size=128m,mode=0755,uid=1999,gid=1999 \
+  -v ./conf.d:/etc/nginx/conf.d:ro \
+  -v html:/var/www/html \
+  -p 80:80 -p 443:443 \
+  jbsky/nginx-waf-hardened:1.30.6.35
+```
+
+- Virtual hosts go in `/etc/nginx/conf.d/`; the shipped
+  [`default.conf`](conf/nginx/conf.d/default.conf) shows the WAF, GeoIP and
+  rate-limit wiring.
+- **Healthcheck**: `GET http://127.0.0.1:80/healthz`, answered by the shipped
+  configuration.
+- **Monitoring**: the VTS module on `/vts-status`, restricted to private
+  addresses (`allow`/`deny`).
+
+### Configuration
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `NGINX_CONF` | `/etc/nginx/nginx.conf` | File validated with `nginx -t` before start |
+
+## Build and test
+
+```bash
+cp .env.example .env
+make build   # build args come from versions.json
+make up      # start the compose stack
+make test    # scripts/test.sh against the running container
+make scan    # Trivy
+```
+
+`scripts/test.sh` checks the healthcheck, that dotfiles, `.git`, SQL dumps and
+`wp-login.php` are refused, that `TRACE` is refused, and that ModSecurity
+blocks a SQL injection and an XSS.
+
+Versions live only in [`versions.json`](versions.json): the Dockerfile has no
+defaults, `make build` and CI pass them through `scripts/versions-build-args.py`,
+and a bare `docker build` stops at the guard. To try another version, change
+it in `versions.json`, never on the command line:
 
 ```bash
 docker build $(scripts/versions-build-args.py --docker) .
 ```
 
-Les trois versions sont volontairement absentes de ce README. Seule celle de
-Nginx est rendue par la CI (tableau et exemples ci-dessus) ; ModSecurity et CRS
-ne sont nulle part, parce qu'une valeur qui n'est ni resolue ni rendue derive en
-silence -- la garde de `update-readme-tags.sh` (jbsky/hardened-ci) ne connait que la famille
-de version de l'image et ne les rattraperait pas.
+## Verification
 
-## Usage rapide
-
-```bash
-cp .env.example .env
-make build   # Build l'image
-make up      # Demarre
-make test    # Smoke tests (healthcheck + ModSec + blocked paths)
-make scan    # Trivy vulnerability scan
-make down    # Arrete
-```
-
-## Architecture
-
-```
-nginx-hardened/
-├── Dockerfile              # 5-stage build (fetcher → builder → gobuilder → prep → scratch)
-├── docker-compose.yml      # Stack hardenee
-├── Makefile                # Raccourcis dev
-├── versions.json           # Versions trackees (nginx, modsec, crs, alpine)
-├── go.mod + init.go        # Go static init binary
-├── conf/
-│   ├── nginx/
-│   │   ├── nginx.conf          # Config principale (hardened)
-│   │   ├── conf.d/default.conf # Vhost par defaut
-│   │   └── mime.types          # Types MIME
-│   └── modsec/
-│       ├── modsecurity.conf    # Config ModSecurity (blocking mode)
-│       ├── main.conf           # Include principal
-│       └── unicode.mapping     # Unicode normalization
-├── errors/                 # Pages d'erreur custom (403, 404, 410, 5xx)
-├── keys/                   # Cles GPG nginx embarquees
-├── scripts/
-│   ├── check-versions.sh  # Resolution auto des versions upstream
-│   ├── deploy.sh          # Build/scan/sbom helper
-│   └── test.sh            # Smoke tests
-└── .github/
-    ├── dependabot.yml      # Weekly GH Actions + Docker updates
-    └── workflows/
-        ├── build-push.yml      # Build + sign + scan + release
-        ├── version-watch.yml   # Daily upstream version detection
-        └── security-audit.yml  # Weekly Trivy + Grype
-```
-
-## CI/CD
-
-Dual pipeline (GitLab + GitHub Actions) :
-
-| Stage | Description |
-|-------|-------------|
-| lint | hadolint |
-| build | buildx + push (ghcr.io + Docker Hub) |
-| sign | cosign keyless OIDC |
-| scan | Trivy SARIF |
-| attest | SBOM + SLSA provenance (level 2) |
-| version-watch | Cron quotidien — bump de `versions.json` (Nginx, ModSecurity, CRS), publication par build-push |
-| security-audit | Cron hebdomadaire — scan vulnerabilites sur images publiees |
-
-## Monitoring
-
-Module VTS sur `/vts-status` (restreint aux IPs privees via `allow`/`deny`).
-
-## Security & Verification
-
-This image is signed with [cosign](https://github.com/sigstore/cosign) using keyless OIDC (Sigstore).
-
-### Verify image signature
+Images are signed with [cosign](https://github.com/sigstore/cosign) (keyless,
+GitHub OIDC) by the shared [hardened-ci](https://github.com/jbsky/hardened-ci)
+pipeline. The certificate names that workflow and, in an extension, this
+repository: the commands below require both.
 
 ```bash
-# From ghcr.io (signatures stored natively)
-cosign verify \
+# ghcr.io
+cosign verify ghcr.io/jbsky/nginx-waf-hardened:1.30.6.35 \
   --certificate-identity-regexp '^https://github.com/(jbsky/nginx-hardened|jbsky/hardened-ci)/' \
   --certificate-github-workflow-repository jbsky/nginx-hardened \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/jbsky/nginx-waf-hardened:latest
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
-# From Docker Hub (signatures stored in ghcr.io)
+# Docker Hub (the signature is stored on ghcr.io)
 COSIGN_REPOSITORY=ghcr.io/jbsky/nginx-waf-hardened \
-  cosign verify \
+  cosign verify docker.io/jbsky/nginx-waf-hardened:1.30.6.35 \
   --certificate-identity-regexp '^https://github.com/(jbsky/nginx-hardened|jbsky/hardened-ci)/' \
   --certificate-github-workflow-repository jbsky/nginx-hardened \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  docker.io/jbsky/nginx-waf-hardened:latest
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-### Hardening tier "Platine" guarantees
-
-| Property | Description |
-|----------|-------------|
-| FROM scratch | No base image, no shell, no package manager |
-| Go static init | Binary entrypoint + healthcheck (no script) |
-| tini PID 1 | Proper signal forwarding and zombie reaping |
-| Non-root | Runs as unprivileged UID |
-| Compiler hardening | RELRO, PIE, SSP, FORTIFY_SOURCE, stack-clash, NX |
-| Cosign signed | OIDC keyless signature via Sigstore transparency log |
-| SBOM | Software Bill of Materials embedded in manifest |
-| SLSA provenance | Build provenance attestation (level 2) |
+Each published digest also carries a CycloneDX SBOM (the `prep` stage the
+image is assembled from, plus its Go binaries), attested with cosign, and a
+GitHub SLSA build provenance attestation. The pipeline lints, builds, scans the
+`prep` stage with Trivy, tests the exact digest it is about to publish (image
+manifest, dependency closure, functional tests), then promotes and signs it.
+Base image digests follow upstream daily (`base-watch`), a fixable Alpine
+package CVE triggers a rebuild (`cve-watch`), and the published image is
+audited weekly (`security-audit`: Trivy, Grype, cosign). Audit status and
+documented exceptions: [`SECURITY.md`](SECURITY.md).
 
 ## License
 
-Le contenu de ce depot -- Dockerfile, `init.go`, scripts et chaine CI -- est
-sous **Apache-2.0**, voir [`LICENSE`](LICENSE). Copyright 2026 jbsky.
+The contents of this repository (Dockerfile, `init.go`, scripts and CI) are
+licensed under **Apache-2.0**, see [`LICENSE`](LICENSE). Copyright 2026 jbsky.
 
-Le logiciel embarque dans l'image garde la sienne : **nginx est sous
-BSD-2-Clause**, et ModSecurity comme l'OWASP Core Rule Set gardent celle de
-leur amont. Les deux plans ne se melangent pas -- `init.go` est un programme
-distinct, qui execute nginx sans etre lie a ses bibliotheques.
+The software shipped in the image keeps its own license: **nginx is under
+BSD-2-Clause**, and ModSecurity, the OWASP Core Rule Set and the modules keep
+their upstream's. The two never mix: `init.go` is a separate program that
+executes nginx without being linked to its libraries.
 
-Contributions : voir [`CONTRIBUTING.md`](CONTRIBUTING.md), un `Signed-off-by`
-est demande.
+Contributions: see [`CONTRIBUTING.md`](CONTRIBUTING.md); a `Signed-off-by` is
+required.
