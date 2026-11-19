@@ -4,8 +4,7 @@
     "key": "nginx"
   },
   "revision": [
-    "--unanchored",
-    "--",
+    "nginx",
     "Dockerfile",
     "conf/",
     "errors/",
