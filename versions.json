@@ -1,6 +1,6 @@
 {
   "nginx": "1.30.8",
   "modsecurity": "3.0.17",
-  "owasp-crs": "4.30.0",
+  "owasp-crs": "4.31.0",
   "alpine": "3.24"
 }
