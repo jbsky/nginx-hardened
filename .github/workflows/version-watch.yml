@@ -98,6 +98,33 @@ jobs:
           mv versions.json.tmp versions.json
           cat versions.json
 
+      # Une montee peut changer le CONTENU de l'image (owasp-crs 4.30.0 ->
+      # 4.31.0, 2026-11-24 : 297 -> 307 fichiers CRS) : la porte `Functional
+      # tests` de build-push refuse alors l'image tant que image.manifest n'a
+      # pas suivi, et main reste bloque (build-push 45441295515, issue #77).
+      # Le regenerer ici, AVANT le commit, c'est la procedure manuelle
+      # ("make build" + "image-manifest.py --generate") jouee par la veille,
+      # comme le font deja uptime-kuma-hardened et radicale-hardened.
+      # image-manifest.py vit dans jbsky/hardened-ci -- meme pin que
+      # build-push.yml : si ce pin bouge, celui-ci doit suivre dans le MEME
+      # commit, sinon les deux manifestes divergent en silence.
+      - name: hardened-ci a la ref de build-push.yml
+        if: steps.check.outputs.updated == 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: jbsky/hardened-ci
+          ref: fdb4a4afabae12204969c3123bdfc13b50d2808b # v1.4.11, meme que build-push.yml
+          path: .hardened-ci
+
+      - name: Reconstruire et regenerer le manifeste
+        if: steps.check.outputs.updated == 'true'
+        run: |
+          set -euo pipefail
+          make build
+          python3 .hardened-ci/scripts/image-manifest.py --generate docker.io/jbsky/nginx-waf-hardened:latest -o image.manifest
+          rm -rf .hardened-ci
+          git diff --stat -- image.manifest
+
       - name: Commit & push
         if: steps.check.outputs.updated == 'true'
         env:
@@ -105,7 +132,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add versions.json
+          git add versions.json image.manifest
           git commit -m "chore(deps): bump ${SUMMARY}"
           git push
 
