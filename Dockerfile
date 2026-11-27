@@ -403,4 +403,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/init"]
 CMD ["nginx", "-g", "daemon off;"]
-# cve-rebuild 2026-11-21 CVE-2026-86144 -- paquets Alpine corriges, pris par apk upgrade du stage prep (cve-watch run 44909885899)
+# cve-rebuild 2026-11-27 CVE-2026-11979, CVE-2026-86138, CVE-2026-86139, CVE-2026-86140, CVE-2026-86142, CVE-2026-86143 -- paquets Alpine corriges, pris par apk upgrade du stage prep (cve-watch run 46025068681)
